@@ -27,6 +27,7 @@ import pytest
 
 from devbox.host.paths import DEVBOX_HOME_ENV, DevboxPaths, ProjectPaths
 from devbox.host.platform_info import PLATFORM_WINDOWS_X64, Platform, current_platform
+from devbox.host.procinfo import process_is_alive
 from devbox.testing.fake_runtime import FakeRegistry, build_fake_registry, build_fake_runtime
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -233,11 +234,16 @@ def _no_leaked_children() -> Iterator[None]:
 
 
 def _child_pids() -> set[int]:
-    """Direct children of this process, on Linux.  Empty set elsewhere.
+    """Direct children of this process that are still *running*, on Linux.
 
-    On Windows the equivalent needs a toolhelp snapshot; the Windows job is
-    covered by ``tests/windows/test_process_tree.py``, which asserts on the
-    tree explicitly instead.
+    Zombies are excluded on purpose: Devbox starts services detached and does
+    not reap them, so a stopped service legitimately lingers as an unreaped
+    entry inside a long-lived pytest process.  That is not a leak — the process
+    is gone.  A leak is a child still executing after the test finished.
+
+    Empty set elsewhere: on Windows the equivalent needs a toolhelp snapshot,
+    and the Windows job asserts on the process tree explicitly instead
+    (``tests/windows/test_process_tree.py``).
     """
     children = Path(f"/proc/{os.getpid()}/task")
     if not children.is_dir():
@@ -249,7 +255,7 @@ def _child_pids() -> set[int]:
         except OSError:
             continue
         pids.update(int(pid) for pid in raw.split())
-    return pids
+    return {pid for pid in pids if process_is_alive(pid)}
 
 
 def _force_kill(pid: int) -> None:

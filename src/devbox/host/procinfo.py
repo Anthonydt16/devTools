@@ -97,7 +97,10 @@ def process_is_alive(pid: int) -> bool:
         return True
     except OSError:
         return False
-    return True
+    # A signalled child whose parent has not called wait() yet is a zombie: the
+    # PID still resolves, but the process is gone.  Reporting it as alive would
+    # make `devbox down` wait for a stop that already happened.
+    return not _linux_process_is_zombie(pid)
 
 
 def process_creation_time(pid: int) -> float | None:
@@ -114,18 +117,32 @@ def process_creation_time(pid: int) -> float | None:
 # ---------------------------------------------------------------------------
 # Linux
 # ---------------------------------------------------------------------------
-def _linux_creation_time(pid: int) -> float | None:
-    stat_path = Path(f"/proc/{pid}/stat")
+def _linux_process_is_zombie(pid: int) -> bool:
+    """True when ``/proc/<pid>`` describes a process that has exited but not been reaped."""
+    if not is_linux():
+        return False
+    fields = _read_proc_stat(pid)
+    return bool(fields) and fields[0] == "Z"
+
+
+def _read_proc_stat(pid: int) -> list[str]:
+    """Fields of ``/proc/<pid>/stat`` *after* ``comm``, or an empty list.
+
+    ``comm`` is parenthesised and may itself contain spaces and parentheses, so
+    the split is anchored on the last ``)`` rather than on whitespace.
+    """
     try:
-        raw = stat_path.read_text(encoding="utf-8", errors="replace")
+        raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return None
-    # The comm field (2) is parenthesised and may itself contain spaces and
-    # parentheses, so split on the *last* ')' rather than tokenising blindly.
+        return []
     close = raw.rfind(")")
     if close == -1:
-        return None
-    fields = raw[close + 2 :].split()
+        return []
+    return raw[close + 2 :].split()
+
+
+def _linux_creation_time(pid: int) -> float | None:
+    fields = _read_proc_stat(pid)
     # After comm, field indices shift by 2: starttime is field 22 -> index 19.
     if len(fields) <= 19:
         return None

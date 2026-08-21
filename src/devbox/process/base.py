@@ -137,6 +137,7 @@ class BaseSupervisor(ABC):
 
         extra = self._after_start(spec, process)
         self._handles[spec.name] = process
+        _disown(process)
 
         return ProcessRecord(
             project_id=project_id,
@@ -303,7 +304,25 @@ class BaseSupervisor(ABC):
 
     def close(self) -> None:
         """Release Popen bookkeeping.  Does not stop anything."""
+        for process in self._handles.values():
+            _disown(process)
         self._handles.clear()
+
+
+def _disown(process: subprocess.Popen[bytes]) -> None:
+    """Tell ``Popen`` that Devbox will not be reaping this child.
+
+    Devbox starts services **detached**: they are meant to outlive the
+    invocation that started them, and ownership is tracked in the state file by
+    PID *and* creation time — not by this handle, which disappears when the
+    process exits.  Without this, ``Popen.__del__`` emits a ResourceWarning for
+    every service still running at exit, which is not a leak but the intended
+    behaviour.
+
+    ``poll()`` and ``wait()`` keep working: the flag only governs the
+    destructor's warning.
+    """
+    process._child_created = False  # type: ignore[attr-defined]
 
 
 def record_timeout(record: ProcessRecord, timeout: float | None) -> float:

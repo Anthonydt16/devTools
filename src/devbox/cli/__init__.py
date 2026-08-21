@@ -1,1 +1,1 @@
-"""Devbox cli package."""
+"""The Typer application. No business logic lives here."""
