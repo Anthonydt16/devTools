@@ -52,6 +52,10 @@ PROCESS_SET_QUOTA: Final = 0x0100
 # -- job object -------------------------------------------------------------
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: Final = 0x00002000
 JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS: Final = 9
+JOB_OBJECT_TERMINATE: Final = 0x0008
+JOB_OBJECT_QUERY: Final = 0x0004
+SYNCHRONIZE: Final = 0x00100000
+JOB_OBJECT_REOPEN_ACCESS: Final = JOB_OBJECT_TERMINATE | JOB_OBJECT_QUERY | SYNCHRONIZE
 
 STILL_ACTIVE: Final = 259
 ERROR_ACCESS_DENIED: Final = 5
@@ -210,21 +214,47 @@ class JobObject:
         self._closed = False
 
     @classmethod
-    def create(cls, name: str, *, kill_on_close: bool = True) -> JobObject:
-        """Create an unnamed job object configured to kill its tree on close.
+    def create(
+        cls,
+        name: str,
+        *,
+        kill_on_close: bool = True,
+        object_name: str | None = None,
+    ) -> JobObject:
+        """Create a job object.
 
-        *name* is only used in error messages: passing a real Win32 object name
-        would let an unrelated process on the same desktop open the job.
+        *object_name* is the Win32 object name.  Devbox passes one — always in
+        the ``Local\\`` namespace, which is scoped to the current logon session
+        — because ``devbox up`` exits and a later ``devbox down`` has to reopen
+        the same job to stop the tree.  Passing ``None`` creates an anonymous job
+        reachable only by this process.
+
+        *kill_on_close* is off for detached services (they must outlive
+        ``devbox up``) and on in foreground mode, so Ctrl-C tears the tree down.
         """
         _require_windows("JobObject.create")
         kernel32 = _kernel32()
-        handle = kernel32.CreateJobObjectW(None, None)
+        handle = kernel32.CreateJobObjectW(None, object_name)
         if not handle:
             raise _win32_error(f"CreateJobObjectW failed for job {name!r}")
         job = cls(handle=int(handle), name=name, kernel32=kernel32)
         if kill_on_close:
             job._set_kill_on_close()
         return job
+
+    @classmethod
+    def open(cls, object_name: str) -> JobObject | None:
+        """Reopen an existing named job, or ``None`` if it no longer exists.
+
+        ``None`` is the normal answer after a reboot, or once every process in
+        the job has exited — not an error.
+        """
+        _require_windows("JobObject.open")
+        kernel32 = _kernel32()
+        handle = kernel32.OpenJobObjectW(JOB_OBJECT_REOPEN_ACCESS, False, object_name)
+        if not handle:
+            return None
+        return cls(handle=int(handle), name=object_name, kernel32=kernel32)
 
     def _set_kill_on_close(self) -> None:
         info = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
