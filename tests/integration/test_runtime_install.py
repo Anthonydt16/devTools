@@ -424,8 +424,6 @@ class TestEnsureInstalled:
         from devbox.errors import LockfileError
 
         with pytest.raises(LockfileError) as caught:
-            manager.ensure_installed(
-                [RuntimeRequirement("node", "18.19.0")], Lockfile(), registry
-            )
+            manager.ensure_installed([RuntimeRequirement("node", "18.19.0")], Lockfile(), registry)
         assert caught.value.hint is not None
         assert "devbox install" in caught.value.hint
