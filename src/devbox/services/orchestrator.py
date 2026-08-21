@@ -653,6 +653,10 @@ class Orchestrator:
         infrastructure = self.context.infrastructure.statuses(
             [self.config.infrastructure[name] for name in sorted(self.config.infrastructure)]
         )
+        # ps() is what reads the project state, so it has to run *before* the
+        # warnings are collected — otherwise a quarantined state file would never
+        # be reported, which is exactly when the user needs to hear about it.
+        services = self.ps()
         warnings = tuple(w.render() for w in self.context.state.take_warnings())
         return StatusReport(
             project=self.context.project_name,
@@ -661,7 +665,7 @@ class Orchestrator:
             devbox_home=str(self.context.paths.root),
             runtimes=runtimes,
             infrastructure=infrastructure,
-            services=self.ps(),
+            services=services,
             warnings=warnings,
         )
 

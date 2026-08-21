@@ -6,6 +6,7 @@ a machine with none of them installed, and with no network access.
 
 Sub-commands
 ------------
+``<script>``             stand in for running a real script — see "Script mode"
 ``--version``            print ``v<version>`` (baked in at install time) and exit
 ``serve``                bind a TCP port, answer HTTP ``/health``, stay alive
 ``sleep``                stay alive for N seconds doing nothing
@@ -20,6 +21,20 @@ The version comes from ``DEVBOX_FAKE_RUNTIME_VERSION``, which the generated
 launcher sets.  That is what makes ``devbox exec legacy-api node --version``
 print ``v18.19.0`` while ``devbox exec new-api node --version`` prints
 ``v24.6.0`` in the same ``devbox up``.
+
+Script mode
+-----------
+``node server.js`` cannot work without Node, but an *example* that says
+``command: python app.py`` to stay testable is not an example of anything.  So
+when the first argument is a script path rather than a sub-command, the fake
+runtime looks for ``<script>.fake`` beside it — a small JSON file describing what
+the real script would do::
+
+    {"port_env": "PORT", "default_port": 3000, "health_path": "/health"}
+
+and serves that.  The example therefore ships the *real* ``server.js`` and runs
+unchanged with real Node; the ``.fake`` file is only consulted by this stand-in.
+Without one, script mode fails loudly rather than pretending to succeed.
 """
 
 from __future__ import annotations
@@ -173,6 +188,50 @@ def _print_env(args: argparse.Namespace) -> int:
     return 0
 
 
+SCRIPT_SUFFIXES = (".js", ".mjs", ".cjs", ".ts", ".py")
+
+
+def _run_script(script: str, argv: list[str]) -> int:
+    """Stand in for a real script, driven by its ``<script>.fake`` sidecar."""
+    import json
+
+    path = Path(script)
+    directive = Path(f"{script}.fake")
+    if not directive.is_file():
+        sys.stderr.write(
+            f"{RUNTIME_NAME}: cannot run {script!r}: this is the Devbox fake runtime, "
+            f"and no directive file was found at {directive}.\n"
+            "Install a real runtime, or add a .fake file; see "
+            "tests/fixtures/fake-runtime/README.md.\n"
+        )
+        sys.stderr.flush()
+        return 2
+
+    try:
+        document = json.loads(directive.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        sys.stderr.write(f"{RUNTIME_NAME}: {directive} is unreadable: {exc}\n")
+        sys.stderr.flush()
+        return 2
+
+    port_env = str(document.get("port_env", "PORT"))
+    port = int(os.environ.get(port_env) or document.get("default_port") or 0)
+    forwarded = [
+        "serve",
+        "--host",
+        str(document.get("host", "127.0.0.1")),
+        "--port",
+        str(port),
+        "--health-path",
+        str(document.get("health_path", "/health")),
+        "--max-seconds",
+        str(document.get("max_seconds", 900)),
+        *argv,
+    ]
+    print(f"{RUNTIME_NAME} {VERSION}: running {path.name} (fake)", flush=True)
+    return int(main(forwarded))
+
+
 def _print_path(_args: argparse.Namespace) -> int:
     for entry in os.environ.get("PATH", "").split(os.pathsep):
         if entry:
@@ -240,9 +299,22 @@ def free_port() -> int:
         return int(sock.getsockname()[1])
 
 
+KNOWN_COMMANDS = frozenset(
+    {"serve", "sleep", "fail", "crash", "spawn-child", "echo-args", "print-env", "print-path"}
+)
+
+
 def main(argv: list[str] | None = None) -> int:
     _install_signal_handlers()
-    args = build_parser().parse_args(argv)
+    arguments = list(sys.argv[1:] if argv is None else argv)
+
+    # Script mode: `node server.js` rather than one of our own sub-commands.
+    if arguments and not arguments[0].startswith("-") and arguments[0] not in KNOWN_COMMANDS:
+        first = arguments[0]
+        if first.lower().endswith(SCRIPT_SUFFIXES):
+            return _run_script(first, arguments[1:])
+
+    args = build_parser().parse_args(arguments)
     if getattr(args, "version", False):
         print(f"v{VERSION}", flush=True)
         return 0

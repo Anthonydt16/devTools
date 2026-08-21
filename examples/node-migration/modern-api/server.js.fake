@@ -1,0 +1,6 @@
+{
+  "_comment": "Tells the Devbox fake runtime how to stand in for server.js when this example is run without Node installed. Real Node ignores this file.",
+  "port_env": "PORT",
+  "default_port": 3002,
+  "health_path": "/health"
+}

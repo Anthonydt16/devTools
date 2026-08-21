@@ -27,31 +27,43 @@ and the reason they were skipped.
 
 ## Layout
 
+Imports go **strictly upwards**.  An earlier version had a cycle; the fix was to
+move things where they belonged, not to defer imports.
+
 ```
 src/devbox/
   errors.py       business error hierarchy; every class carries an exit code
   host/           the ONLY place allowed to branch on the operating system
-                  paths.py (%LOCALAPPDATA%\Devbox), procinfo.py (PID + creation
-                  time), winapi.py (ctypes: GetProcessTimes, Job Objects)
+                  paths.py (%LOCALAPPDATA%\Devbox), platform_info.py,
+                  procinfo.py (PID + creation time),
+                  winapi.py (ctypes: GetProcessTimes, Job Objects)
+  catalogs/       which runtime kinds and providers exist — dependency-free leaf,
+                  because config validation needs it and must not depend on the
+                  layers it validates
   config/         devbox.yml: models.py, reader.py (strict), loader.py,
                   interpolation.py (${database.x.url})
-  lockfile/       devbox.lock: models, io, resolver
+  lockfile/       devbox.lock: models.py, io.py (byte-stable)
+  security/       paths (containment), hashing, archive (safe extraction),
+                  command (argv construction, never a shell)
+  runtime/        registry.py, download.py, manager.py, resolver.py,
+                  environment.py (per-child PATH), manifest.py
+  process/        supervisor.py (Protocol), base.py (shared), windows.py
+                  (Job Objects), posix.py (dev/CI on Linux), fake.py, runner.py
+  state/          process and infrastructure ownership records
   graph/          dependency graph, topological order, cycle detection
-  runtime/        catalog.py (kinds), registry.py, download.py, extract.py,
-                  manager.py, environment.py (per-child PATH)
-  process/        supervisor.py (Protocol), windows.py (Job Objects),
-                  posix.py (dev/CI on Linux), fake.py (deterministic)
-  state/          process ownership records (pid + creation time)
-  health/         TCP and HTTP checks
-  infra/          shared PostgreSQL / MySQL / <any provider>
+  health/         TCP and HTTP readiness, retry policy with injected clock
+  infra/          shared PostgreSQL / MySQL / <any registered provider>
   database/       logical databases inside a shared server
-  services/       the orchestrator: up / down / ps / logs / exec
+  services/       the orchestrator: project.py, orchestrator.py, events.py
   build/          reproducible artifact + manifest
-  validation/     `devbox test`
-  security/       hashing, safe paths, safe archive extraction, command building
+  validation/     `devbox test`: checks.py, suite.py
   cli/            Typer application; no business logic lives here
   testing/        reusable fakes and fixtures (shipped, not test-only)
+  packaging/      PyInstaller build for devbox.exe
 ```
+
+Resolving a lockfile queries a registry, so `resolve_lockfile` lives in
+`runtime/`, not in `lockfile/`.
 
 ## Conventions
 
@@ -84,6 +96,9 @@ src/devbox/
   - `windows` — needs a real Windows host; skipped elsewhere with an explicit
     reason via `tests/conftest.py`;
   - `slow` — over ~2 seconds.
+- **The suite must be load-bearing.**  `tests/unit/test_suite_is_load_bearing.py`
+  sabotages mandatory behaviour and asserts the suite goes red.  A new
+  non-regression rule should be accompanied by a sabotage that proves it.
 - **Every test must clean up**: no leaked child process, no leaked temp file, no
   bound port left open.  Use the `devbox_home`, `project`, `supervisor` and
   `fake_runtime` fixtures from `tests/conftest.py`; they all tear down.

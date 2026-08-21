@@ -1,0 +1,49 @@
+# Node 18 -> Node 24 migration, running side by side.
+#
+# The whole point of Devbox in one file: legacy-api needs Node 18 and modern-api
+# needs Node 24, and `devbox up` runs both at the same time with nothing
+# installed globally and nothing to switch between them.
+#
+#   devbox install
+#   devbox up
+#   devbox exec legacy-api node --version   # v18.19.0
+#   devbox exec modern-api node --version   # v24.6.0
+#   devbox down
+version: 1
+project: node-migration
+
+services:
+  legacy-api:
+    runtime: { node: "18.19.0" }
+    working_dir: ./legacy-api
+    command: node server.js
+    env:
+      PORT: "3001"
+      NODE_ENV: development
+      SERVICE_NAME: legacy-api
+    healthcheck:
+      http:
+        url: "http://127.0.0.1:3001/health"
+        interval: 0.5
+        timeout: 5
+        retries: 40
+        start_period: 0.5
+
+  modern-api:
+    runtime: { node: "24.6.0" }
+    working_dir: ./modern-api
+    command: node server.js
+    env:
+      PORT: "3002"
+      NODE_ENV: development
+      SERVICE_NAME: modern-api
+      # The new service talks to the old one during the migration.
+      LEGACY_API_URL: "http://127.0.0.1:3001"
+    depends_on: [legacy-api]
+    healthcheck:
+      tcp:
+        host: 127.0.0.1
+        port: 3002
+        interval: 0.5
+        timeout: 5
+        retries: 40

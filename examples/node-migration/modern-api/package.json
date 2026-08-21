@@ -1,0 +1,11 @@
+{
+  "name": "modern-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Runs on Node 24 during the migration.",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "dev": "node server.js",
+    "start": "node server.js"
+  }
+}

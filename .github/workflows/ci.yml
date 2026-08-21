@@ -1,0 +1,188 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "claude/**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUNBUFFERED: "1"
+  # Reproducible artifacts: two builds of the same tree must be byte-identical.
+  SOURCE_DATE_EPOCH: "1700000000"
+  NO_COLOR: "1"
+
+jobs:
+  linux:
+    name: Linux — lint, types, unit, integration, coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Format
+        run: ruff format --check .
+
+      - name: Types
+        run: mypy src
+
+      - name: Unit tests
+        run: python -m pytest -m unit -q -rs
+
+      - name: Integration tests
+        run: python -m pytest -m integration -q -rs
+
+      - name: Coverage
+        run: |
+          python -m pytest --cov=devbox --cov-report=term-missing --cov-report=xml -q
+
+      - name: No leaked processes
+        # The suite fails a test that leaks a child, but a belt-and-braces check
+        # catches anything started outside a test.
+        run: |
+          leaked=$(pgrep -f "runtime_main.py" || true)
+          if [ -n "$leaked" ]; then
+            echo "leaked processes: $leaked" >&2
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-linux
+          path: coverage.xml
+          if-no-files-found: warn
+
+  windows:
+    name: Windows — the half Linux cannot run
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Windows-only tests
+        # Job Objects, process trees, PID identity, cmd shims, code pages.
+        run: python -m pytest -m windows -q -rs
+
+      - name: Unit tests on Windows
+        run: python -m pytest -m unit -q -rs
+
+      - name: Integration tests on Windows
+        # Real child processes, real ports, real log files, on the target OS.
+        run: python -m pytest -m integration -q -rs
+
+      - name: CLI works from a path containing spaces
+        shell: pwsh
+        run: |
+          $target = Join-Path $env:RUNNER_TEMP 'My Projects\customer portal'
+          New-Item -ItemType Directory -Force -Path $target | Out-Null
+          Push-Location $target
+          python -m devbox version
+          python -m devbox init
+          python -m devbox --file (Join-Path $target 'devbox.yml') ps
+          Pop-Location
+
+      - name: No leaked processes
+        shell: pwsh
+        run: |
+          $leaked = Get-CimInstance Win32_Process |
+            Where-Object { $_.CommandLine -like '*runtime_main.py*' }
+          if ($leaked) {
+            $leaked | Format-Table ProcessId, CommandLine
+            throw "the suite leaked $($leaked.Count) process(es)"
+          }
+
+  validation:
+    name: devbox test (the single command)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run the whole validation suite
+        # This is the command the README tells a developer to run. If it passes
+        # here and fails for them, the promise is broken.
+        run: devbox test
+
+      - name: The CLI never blocks on stdin
+        # A command that reads stdin hangs CI forever; prove none of them do.
+        run: |
+          for command in version "--help" "runtime list"; do
+            devbox $command < /dev/null > /dev/null
+          done
+
+  packaging:
+    name: PyInstaller build
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,package]"
+
+      - name: Build devbox.exe
+        run: python -m devbox.packaging.build_exe
+
+      - name: The executable runs without a Python install on PATH
+        shell: pwsh
+        run: |
+          $exe = Join-Path (Get-Location) 'dist\devbox.exe'
+          if (-not (Test-Path $exe)) { throw "devbox.exe was not produced" }
+          & $exe version
+          & $exe --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "devbox.exe --help failed" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: devbox-exe
+          path: dist/devbox.exe
+          if-no-files-found: error
