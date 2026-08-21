@@ -13,7 +13,7 @@ Everything below assumes an activated virtualenv with `pip install -e ".[dev]"`.
 | Full autonomous validation (what CI runs) | `devbox test` |
 | Unit tests only | `python -m pytest -m unit` |
 | Integration tests (spawn real processes) | `python -m pytest -m integration` |
-| Everything, with coverage | `python -m pytest --cov=devbox --cov-report=term-missing` |
+| Everything, with coverage | `python -m pytest --cov=devbox --cov-report=term-missing` (83%) |
 | Windows-only tests | `python -m pytest -m windows` (skips off Windows) |
 | Lint | `ruff check .` |
 | Format check / fix | `ruff format --check .` / `ruff format .` |

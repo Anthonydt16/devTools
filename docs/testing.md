@@ -10,18 +10,18 @@ devbox test
 Devbox validation suite — C:\projects\devbox
 
   ✓ lint         All checks passed!
-  ✓ format       110 files already formatted
-  ✓ types        Success: no issues found in 87 source files
-  ✓ unit         303 passed (3s)
-  ✓ integration  88 passed (19s)
-  · windows      37 skipped
-  ✓ config       2 configuration file(s) checked
+  ✓ format       134 files already formatted
+  ✓ types        Success: no issues found in 88 source files
+  ✓ unit         467 passed (5s)
+  ✓ integration  146 passed (36s)
+  ✓ windows      37 skipped
+  ✓ config       1 configuration file(s) checked
   ✓ packaging    Devbox v0.1.0
 
 Summary
-  tests:  391 passed, 0 failed, 37 skipped
+  tests:  613 passed, 0 failed, 37 skipped
   checks: 8 run, 0 failed
-  time:   23s
+  time:   43s
 
   Skipped:
     37 test(s) skipped: requires a real Windows host (running on linux); these run on the windows-latest CI job
@@ -124,6 +124,7 @@ on a Linux container with neither Node version installed.
 | Area | How |
 |---|---|
 | Configuration | 56 cases: every documented failure mode, asserting on the *message* |
+| Interpolation | 27 cases: validation at load time, resolution at start-up, non-recursion |
 | Lockfile | round-trip, byte stability, ambiguous versions (`8.4` must not become a float), sticky resolution |
 | Dependency graph | ordering, determinism, cycles named in order, a 5 000-node chain that must not hit the recursion limit |
 | Archive extraction | 30 attacks: traversal, UNC, drive letters, reserved names, links, devices, bombs, lying headers |
@@ -169,6 +170,19 @@ disabling one is not enough to let a bad artifact in.
   `127.0.0.1`, port 0, torn down at the end of the test;
 * no `time.sleep` in a unit test — clocks and `sleep` are injected;
 * `filterwarnings = ["error"]`, so a `ResourceWarning` fails the run.
+
+## Coverage
+
+83% overall, with nothing excluded from the report on purpose.  The modules
+below the line are there for reasons worth stating rather than hiding:
+
+| Module | Linux | Why |
+|---|---|---|
+| `testing/fake_runtime_main.py` | 16% | it runs in **child processes**, so the parent's coverage never sees it — it is one of the most heavily exercised files in the repository |
+| `host/winapi.py` | 30% | Win32 `ctypes`; covered by the `windows-latest` job |
+| `process/windows.py` | 40% | Job Objects; covered by the `windows-latest` job |
+| `host/procinfo.py` | 58% | the Windows and macOS branches cannot run here |
+| `__main__.py` | 60% | the `if __name__ == "__main__"` guard |
 
 ## CI
 

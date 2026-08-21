@@ -79,7 +79,10 @@ xfail_strict = true
 [tool.coverage.run]
 branch = true
 source = ["devbox"]
-omit = ["*/devbox/process/windows.py", "*/devbox/platform/_winapi.py"]
+# Nothing is omitted on purpose. devbox/host/winapi.py and
+# devbox/process/windows.py score low on Linux because they cannot execute
+# there; hiding them would make the number look better and mean less. They are
+# covered by the windows-latest CI job. See docs/limitations.md.
 
 [tool.coverage.report]
 exclude_also = [

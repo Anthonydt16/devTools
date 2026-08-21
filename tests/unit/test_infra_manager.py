@@ -405,6 +405,118 @@ class TestCommandConstruction:
         assert f"--datadir={context.data_dir}" in argv
         assert "--port=3306" in argv
 
+    def test_mysql_initialises_only_an_empty_data_directory(
+        self, devbox_home: DevboxPaths, tmp_path: Path
+    ) -> None:
+        from devbox.infra.mysql import MysqlProvider
+
+        context = _context_with_fake_binaries(
+            devbox_home, tmp_path, "mysql", ("mysqld",), port=3306
+        )
+        assert MysqlProvider().needs_initialisation(context)
+
+        (context.data_dir / "mysql").mkdir(parents=True, exist_ok=True)
+        assert not MysqlProvider().needs_initialisation(context)
+
+        runner = context.runner
+        assert isinstance(runner, RecordingRunner)
+        MysqlProvider().initialise(context)
+        assert runner.calls == [], "--initialize must not run over an existing data directory"
+
+    def test_mysql_initialisation_uses_initialize_insecure(
+        self, devbox_home: DevboxPaths, tmp_path: Path
+    ) -> None:
+        from devbox.infra.mysql import MysqlProvider
+
+        context = _context_with_fake_binaries(
+            devbox_home, tmp_path, "mysql", ("mysqld",), port=3306
+        )
+        runner = context.runner
+        assert isinstance(runner, RecordingRunner)
+        MysqlProvider().initialise(context)
+
+        assert runner.ran("--initialize-insecure")
+        assert runner.ran(f"--datadir={context.data_dir}")
+
+    def test_mysql_stops_with_mysqladmin_shutdown(
+        self, devbox_home: DevboxPaths, tmp_path: Path
+    ) -> None:
+        from devbox.infra.mysql import MysqlProvider
+
+        context = _context_with_fake_binaries(
+            devbox_home, tmp_path, "mysql", ("mysqladmin",), port=3306
+        )
+        argv = MysqlProvider().stop_command(context)
+        assert argv is not None
+        assert argv[0].endswith("mysqladmin")
+        assert "shutdown" in argv
+
+    def test_mysql_lists_databases_one_per_line(
+        self, devbox_home: DevboxPaths, tmp_path: Path
+    ) -> None:
+        """--batch --skip-column-names is what makes the output parseable."""
+        from devbox.infra.mysql import MysqlProvider
+
+        context = _context_with_fake_binaries(
+            devbox_home, tmp_path, "mysql", ("mysql", "mysqladmin"), port=3306
+        )
+        client = MysqlProvider().database_client(context)
+        from devbox.infra.sql import SqlDatabaseClient
+
+        assert isinstance(client, SqlDatabaseClient)
+        assert "--batch" in client.list_argv
+        assert "--skip-column-names" in client.list_argv
+        assert "SHOW DATABASES" in client.list_argv
+
+    def test_mysql_urls_use_the_mysql_scheme(
+        self, devbox_home: DevboxPaths, tmp_path: Path
+    ) -> None:
+        from devbox.infra.mysql import MysqlProvider
+
+        context = _context_with_fake_binaries(devbox_home, tmp_path, "mysql", (), port=3306)
+        url = MysqlProvider().connection_url(context, "legacy", username="root")
+        assert url == "mysql://root@127.0.0.1:3306/legacy"
+
+    def test_mysql_healthcheck_targets_its_own_port(
+        self, devbox_home: DevboxPaths, tmp_path: Path
+    ) -> None:
+        from devbox.config.models import TcpHealthcheck
+        from devbox.infra.mysql import MysqlProvider
+
+        context = _context_with_fake_binaries(devbox_home, tmp_path, "mysql", (), port=3306)
+        check = MysqlProvider().healthcheck(context)
+        assert isinstance(check, TcpHealthcheck)
+        assert check.port == 3306
+
+    def test_postgres_lists_databases_unaligned_and_tuples_only(
+        self, devbox_home: DevboxPaths, tmp_path: Path
+    ) -> None:
+        from devbox.infra.postgres import PostgresProvider
+        from devbox.infra.sql import SqlDatabaseClient
+
+        context = _context_with_fake_binaries(
+            devbox_home, tmp_path, "postgres", ("psql", "createdb")
+        )
+        client = PostgresProvider().database_client(context)
+        assert isinstance(client, SqlDatabaseClient)
+        assert "-A" in client.list_argv and "-t" in client.list_argv
+        assert "pg_database" in " ".join(client.list_argv)
+        assert "--owner" in client.create_argv_template
+
+    def test_postgres_initialisation_creates_the_cluster(
+        self, devbox_home: DevboxPaths, tmp_path: Path
+    ) -> None:
+        from devbox.infra.postgres import PostgresProvider
+
+        context = _context_with_fake_binaries(devbox_home, tmp_path, "postgres", ("initdb",))
+        runner = context.runner
+        assert isinstance(runner, RecordingRunner)
+        PostgresProvider().initialise(context)
+
+        assert runner.ran("initdb")
+        assert runner.ran("--pgdata")
+        assert runner.ran("UTF8")
+
     def test_a_missing_binary_is_an_actionable_error(
         self, devbox_home: DevboxPaths, tmp_path: Path
     ) -> None:

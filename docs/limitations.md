@@ -99,11 +99,12 @@ good way to write a configuration file that loops.
 `ReadDirectoryChangesW` / `inotify`.  Simple, portable, and imperceptible at
 human latency; it does mean a busy log is delivered in bursts.
 
-### Coverage of `winapi.py`
+### Coverage of the Windows modules
 
-`process/windows.py` and `host/winapi.py` are excluded from the Linux coverage
-report — they cannot execute there, and including them would make the number
-meaningless in the wrong direction.  They are covered by the Windows job.
+Nothing is excluded from the coverage report.  `host/winapi.py` and
+`process/windows.py` therefore score low on a Linux run — they cannot execute
+there — and that is deliberate: omitting them would make the total look better
+and mean less.  They are exercised by the `windows-latest` job.
 
 ## What would be done next
 
