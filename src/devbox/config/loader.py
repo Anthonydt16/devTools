@@ -499,6 +499,20 @@ def _cross_validate(
                     f"services.{name}.depends_on[{index}]",
                     f"unknown dependency {dependency!r} (known: {known})",
                 )
+        # ${...} is allowed anywhere a value is interpolated at start-up, not
+        # only in env: a command may legitimately need a port or a path.
+        for field_name, value in (
+            ("command", service.command),
+            ("working_dir", service.working_dir),
+        ):
+            reader.issues.extend(
+                validate_references(
+                    value,
+                    path=f"services.{name}.{field_name}",
+                    databases=database_names,
+                    infrastructure=infrastructure_names,
+                )
+            )
         for key, value in service.env.items():
             reader.issues.extend(
                 validate_references(

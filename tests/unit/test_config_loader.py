@@ -97,8 +97,21 @@ class TestValidConfiguration:
         assert sorted(config.infrastructure) == ["company-mysql", "company-postgres"]
 
     def test_runtimes_are_collected_and_sorted(self) -> None:
+        """Managed servers count too: their binaries have to be installed."""
         config = load(VALID)
-        assert [str(r) for r in config.required_runtimes()] == ["node 18.19.0", "node 24.6.0"]
+        assert [str(r) for r in config.required_runtimes()] == [
+            "mysql 8.4",
+            "node 18.19.0",
+            "node 24.6.0",
+            "postgres 17",
+        ]
+
+    def test_an_external_server_needs_no_runtime_installed(self) -> None:
+        config = load(VALID, environment="production")
+        assert [str(r) for r in config.required_runtimes()] == [
+            "node 18.19.0",
+            "node 24.6.0",
+        ]
 
     def test_healthchecks_are_typed(self) -> None:
         config = load(VALID)

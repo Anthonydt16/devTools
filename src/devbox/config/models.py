@@ -232,13 +232,28 @@ class ProjectConfig:
         return tuple(spec for spec in self.infrastructure.values() if spec.is_managed)
 
     def required_runtimes(self) -> tuple[RuntimeRequirement, ...]:
-        """Every distinct runtime this project needs, sorted for reproducibility."""
+        """Every distinct runtime this project needs, sorted for reproducibility.
+
+        Includes the runtime backing each **managed** infrastructure provider:
+        a project that declares a managed PostgreSQL 17 needs the PostgreSQL 17
+        binaries installed just as much as it needs Node, and `devbox install`
+        must pin and fetch them.  An ``external`` server needs nothing installed
+        — it is somebody else's process.
+        """
+        from devbox.catalogs.providers import provider_descriptor
+
         seen: set[RuntimeRequirement] = set()
         for service in self.services.values():
             seen.update(service.runtime)
         for database in self.databases.values():
             if database.init is not None:
                 seen.update(database.init.runtime)
+        for infrastructure in self.infrastructure.values():
+            if not infrastructure.is_managed or not infrastructure.version:
+                continue
+            descriptor = provider_descriptor(infrastructure.provider)
+            if descriptor is not None and descriptor.runtime_kind:
+                seen.add(RuntimeRequirement(descriptor.runtime_kind, infrastructure.version))
         return tuple(sorted(seen))
 
     def node_names(self) -> frozenset[str]:
