@@ -1,1 +1,1 @@
-"""Devbox security package."""
+"""Security primitives: containment, integrity, safe command construction."""

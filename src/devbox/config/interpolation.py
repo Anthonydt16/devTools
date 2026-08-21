@@ -136,7 +136,11 @@ def _validate_one(
     if ref.namespace == "database":
         if ref.target not in databases:
             known = ", ".join(sorted(databases)) or "<none declared>"
-            return [ValidationIssue(path, f"unknown database {ref.target!r} in {ref} (declared: {known})")]
+            return [
+                ValidationIssue(
+                    path, f"unknown database {ref.target!r} in {ref} (declared: {known})"
+                )
+            ]
         if ref.field not in DATABASE_FIELDS:
             return [
                 ValidationIssue(
@@ -148,7 +152,11 @@ def _validate_one(
         return []
     if ref.target not in infrastructure:
         known = ", ".join(sorted(infrastructure)) or "<none declared>"
-        return [ValidationIssue(path, f"unknown infrastructure {ref.target!r} in {ref} (declared: {known})")]
+        return [
+            ValidationIssue(
+                path, f"unknown infrastructure {ref.target!r} in {ref} (declared: {known})"
+            )
+        ]
     if ref.field not in INFRASTRUCTURE_FIELDS:
         return [
             ValidationIssue(
@@ -178,8 +186,7 @@ class InterpolationContext:
                     raise ConfigError(
                         msg,
                         hint=(
-                            f"Set it before running Devbox: "
-                            f"$env:{ref.target}='...' (PowerShell)."
+                            f"Set it before running Devbox: $env:{ref.target}='...' (PowerShell)."
                         ),
                     )
                 return value

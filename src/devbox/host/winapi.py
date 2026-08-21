@@ -35,6 +35,7 @@ import sys
 from typing import Any, Final, cast
 
 from devbox.errors import ProcessError, UnsupportedPlatformError
+from devbox.host.platform_info import is_windows
 
 __all__ = [
     "JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE",
@@ -63,12 +64,22 @@ _FILETIME_TICKS_PER_SECOND: Final = 10_000_000
 
 
 def _require_windows(operation: str) -> None:
-    if sys.platform != "win32":
+    if not is_windows():
         msg = f"{operation} requires Windows (running on {sys.platform!r})"
         raise UnsupportedPlatformError(
             msg,
             hint="This code path is Windows-only by design; see docs/windows.md.",
         )
+
+
+def _last_error() -> int:
+    """``GetLastError`` for the current thread.
+
+    Wrapped because typeshed declares ``ctypes.get_last_error`` Windows-only, so
+    a type checker running on Linux cannot see it; the one ignore lives here
+    instead of at every call site.
+    """
+    return int(ctypes.get_last_error())  # type: ignore[attr-defined]
 
 
 def _kernel32() -> Any:
@@ -159,7 +170,7 @@ def process_is_alive(pid: int) -> bool:
         # ERROR_ACCESS_DENIED means the process exists but belongs to somebody
         # else; that is still "alive", and Devbox will refuse to touch it because
         # the creation time will not match any record it owns.
-        return ctypes.get_last_error() == ERROR_ACCESS_DENIED
+        return _last_error() == ERROR_ACCESS_DENIED
     try:
         code = ctypes.c_uint32(0)
         if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
@@ -246,7 +257,7 @@ class JobObject:
         _require_windows("JobObject.terminate")
         if not self._kernel32.TerminateJobObject(self._handle, exit_code):
             # The job may already be empty; that is not an error worth raising.
-            last = ctypes.get_last_error()
+            last = _last_error()
             if last not in (0, ERROR_INVALID_PARAMETER):
                 raise _win32_error(f"TerminateJobObject failed for job {self.name!r}")
 
@@ -265,6 +276,6 @@ class JobObject:
 
 
 def _win32_error(operation: str) -> ProcessError:
-    code = ctypes.get_last_error()
+    code = _last_error()
     message = ctypes.FormatError(code).strip()  # type: ignore[attr-defined]
     return ProcessError(f"{operation}: [{code}] {cast(str, message)}")

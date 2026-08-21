@@ -21,7 +21,7 @@ the end, with the full list.
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
-from typing import Final, TypeVar
+from typing import Final, TypeVar, cast
 
 from devbox.errors import ConfigError, ValidationIssue
 
@@ -130,7 +130,9 @@ class Node:
                 )
             return {str(k): v for k, v in self.value.items()}
         if self.value is not None:
-            self._reader.error(self.path or "<root>", f"expected a mapping, got {_type_name(self.value)}")
+            self._reader.error(
+                self.path or "<root>", f"expected a mapping, got {_type_name(self.value)}"
+            )
         return {}
 
     def child(self, key: str) -> Node:
@@ -181,7 +183,8 @@ class Node:
             self._reader.error(self.path, f"expected {_SCALAR_NAMES[expected]}, got a boolean")
             return default
         if expected is float and isinstance(value, int):
-            return expected(value)  # type: ignore[return-value]
+            # YAML writes `timeout: 30`; a whole number is a perfectly good float.
+            return cast(_T, float(value))
         if isinstance(value, expected):
             return value
         self._reader.error(
@@ -228,7 +231,7 @@ class Node:
             return default
         return self._scalar(float, default, required=False)
 
-    def optional_bool(self, default: bool) -> bool:  # noqa: FBT001 - mirrors YAML shape
+    def optional_bool(self, default: bool) -> bool:
         if self.value is None:
             return default
         return self._scalar(bool, default, required=False)
@@ -268,7 +271,9 @@ class Node:
             if isinstance(item, str):
                 out.append(item)
             else:
-                self._reader.error(f"{self.path}[{index}]", f"expected a string, got {_type_name(item)}")
+                self._reader.error(
+                    f"{self.path}[{index}]", f"expected a string, got {_type_name(item)}"
+                )
         return tuple(out)
 
     def int_list(self) -> tuple[int, ...]:
@@ -280,7 +285,9 @@ class Node:
         out: list[int] = []
         for index, item in enumerate(self.value):
             if isinstance(item, bool) or not isinstance(item, int):
-                self._reader.error(f"{self.path}[{index}]", f"expected an integer, got {_type_name(item)}")
+                self._reader.error(
+                    f"{self.path}[{index}]", f"expected an integer, got {_type_name(item)}"
+                )
             else:
                 out.append(item)
         return tuple(out)

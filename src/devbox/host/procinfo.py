@@ -23,9 +23,10 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+from devbox.host.platform_info import is_linux, is_windows
 
 __all__ = ["ProcessIdentity", "process_creation_time", "process_is_alive"]
 
@@ -85,7 +86,7 @@ def process_is_alive(pid: int) -> bool:
     """
     if pid <= 0:
         return False
-    if sys.platform == "win32":
+    if is_windows():
         return _windows_process_is_alive(pid)
     try:
         os.kill(pid, 0)
@@ -103,9 +104,9 @@ def process_creation_time(pid: int) -> float | None:
     """Opaque, platform-local creation timestamp, or ``None`` if unavailable."""
     if pid <= 0:
         return None
-    if sys.platform == "win32":
+    if is_windows():
         return _windows_creation_time(pid)
-    if sys.platform.startswith("linux"):
+    if is_linux():
         return _linux_creation_time(pid)
     return _ps_creation_time(pid)
 

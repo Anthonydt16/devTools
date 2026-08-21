@@ -490,7 +490,9 @@ def _cross_validate(
     for name, service in services.items():
         for index, dependency in enumerate(service.depends_on):
             if dependency == name:
-                reader.error(f"services.{name}.depends_on[{index}]", "a service cannot depend on itself")
+                reader.error(
+                    f"services.{name}.depends_on[{index}]", "a service cannot depend on itself"
+                )
             elif dependency not in node_names:
                 known = ", ".join(sorted(node_names - {name})) or "<none>"
                 reader.error(

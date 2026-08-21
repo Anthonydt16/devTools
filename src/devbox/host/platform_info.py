@@ -20,6 +20,7 @@ __all__ = [
     "PLATFORM_WINDOWS_X64",
     "Platform",
     "current_platform",
+    "is_linux",
     "is_windows",
 ]
 
@@ -90,5 +91,14 @@ def is_windows() -> bool:
 
     This is the single place Devbox is allowed to ask the question; everything
     else selects an implementation through a factory that consults it once.
+
+    It is a function rather than a module constant on purpose: a static
+    ``sys.platform == "win32"`` comparison makes a type checker running on Linux
+    treat every Windows branch as dead code and stop checking it.
     """
     return sys.platform == "win32"
+
+
+def is_linux() -> bool:
+    """True on Linux.  Same reasoning as :func:`is_windows`."""
+    return sys.platform.startswith("linux")
