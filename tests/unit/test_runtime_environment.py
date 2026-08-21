@@ -6,9 +6,13 @@ from pathlib import Path
 
 import pytest
 
+from devbox.catalogs.runtime_kinds import (
+    RuntimeKind,
+    register_runtime_kind,
+    unregister_runtime_kind,
+)
 from devbox.config.models import RuntimeRequirement
 from devbox.host.platform_info import PLATFORM_LINUX_X64, PLATFORM_WINDOWS_X64
-from devbox.runtime.catalog import RuntimeKind, register_runtime_kind, unregister_runtime_kind
 from devbox.runtime.environment import build_environment
 
 pytestmark = pytest.mark.unit

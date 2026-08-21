@@ -115,6 +115,29 @@ SHA256, from this source, for this platform".  Resolution is deterministic and
 the lockfile is committed to Git.  Nothing is ever installed without a SHA256
 that matches — non-regression test #4.
 
+### D10 — One-way layering, enforced by the import graph
+
+Packages import strictly upwards:
+
+```
+errors · host · catalogs          leaf, no Devbox dependencies
+config · security · lockfile      depend only on the leaves
+runtime                           depends on config.models, lockfile.models, security
+process · state · logs · health · graph
+infra · database
+services · build · validation · cli
+```
+
+Two consequences of building it this way, both discovered by an import cycle
+that this restructure removed:
+
+* the *catalogs* (which runtime kinds and which infrastructure providers exist)
+  live in their own leaf package, because configuration validation needs them
+  and the config layer must not depend on the layers it validates;
+* **resolving** a lockfile queries a registry, so `resolve_lockfile` lives in
+  `runtime/`, not in `lockfile/`.  `lockfile/` only models, reads and writes the
+  file, and depends on nothing above it.
+
 ### D9 — Three supervisors, one protocol
 
 `windows.py` (Job Objects), `posix.py` (process groups — used to develop and to

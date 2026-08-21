@@ -16,11 +16,10 @@ from devbox.lockfile import (
     dump_lockfile,
     parse_lockfile,
     read_lockfile,
-    resolve_lockfile,
-    verify_lockfile_covers,
     write_lockfile,
 )
 from devbox.runtime.registry import FilesystemRegistry
+from devbox.runtime.resolver import resolve_lockfile, verify_lockfile_covers
 from devbox.testing.fake_runtime import FakeRegistry
 
 pytestmark = pytest.mark.unit

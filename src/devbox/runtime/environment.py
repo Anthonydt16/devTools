@@ -26,9 +26,9 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from devbox.catalogs.runtime_kinds import runtime_kind
 from devbox.config.models import RuntimeRequirement
 from devbox.host.platform_info import Platform, current_platform
-from devbox.runtime.catalog import runtime_kind
 
 __all__ = ["RuntimeEnvironment", "build_environment"]
 

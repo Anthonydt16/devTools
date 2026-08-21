@@ -17,6 +17,8 @@ from typing import Final
 
 import yaml
 
+from devbox.catalogs.providers import known_providers, provider_descriptor
+from devbox.catalogs.runtime_kinds import known_runtime_kinds
 from devbox.config.interpolation import validate_references
 from devbox.config.models import (
     DEFAULT_HOST,
@@ -34,8 +36,6 @@ from devbox.config.models import (
 )
 from devbox.config.reader import Node, Reader
 from devbox.errors import ConfigError
-from devbox.infra.catalog import known_providers, provider_descriptor
-from devbox.runtime.catalog import known_runtime_kinds
 
 __all__ = [
     "DEFAULT_ENVIRONMENT",
