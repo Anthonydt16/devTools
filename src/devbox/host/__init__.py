@@ -1,0 +1,27 @@
+"""Host-environment abstractions: filesystem layout, process introspection, Win32 glue.
+
+Everything in this package is allowed to branch on the current operating system.
+The rest of Devbox must not: it depends on the protocols exposed here.
+"""
+
+from devbox.host.paths import DevboxPaths, ProjectPaths, resolve_devbox_home
+from devbox.host.platform_info import (
+    PLATFORM_WINDOWS_X64,
+    Platform,
+    current_platform,
+    is_windows,
+)
+from devbox.host.procinfo import ProcessIdentity, process_creation_time, process_is_alive
+
+__all__ = [
+    "PLATFORM_WINDOWS_X64",
+    "DevboxPaths",
+    "Platform",
+    "ProcessIdentity",
+    "ProjectPaths",
+    "current_platform",
+    "is_windows",
+    "process_creation_time",
+    "process_is_alive",
+    "resolve_devbox_home",
+]
