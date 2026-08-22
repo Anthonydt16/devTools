@@ -17,6 +17,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
+from tests.conftest import minimal_child_environment
 
 from devbox.config.loader import load_config
 from devbox.errors import ConfigError
@@ -114,11 +115,7 @@ def build_orchestrator(
             project_root=root,
             paths=devbox_home,
             platform=host_platform,
-            environ={
-                "PATH": "/usr/bin:/bin",
-                "PY": sys.executable,
-                "DEVBOX_HOME": str(devbox_home.root),
-            },
+            environ=minimal_child_environment(PY=sys.executable, DEVBOX_HOME=str(devbox_home.root)),
             supervisor=create_supervisor(),
             runner=SubprocessRunner(),
         )
@@ -308,17 +305,16 @@ class TestRecoveryAfterACrash:
         assert wait_until(lambda: not port_open(port))
 
     def test_a_service_killed_behind_devboxs_back_is_reported_as_stopped(
-        self, ready: tuple[Orchestrator, Path, int]
+        self,
+        ready: tuple[Orchestrator, Path, int],
+        hard_kill_outside_devbox: Callable[[int, int], None],
     ) -> None:
-        import os
-        import signal
-
         orchestrator, _root, port = ready
         orchestrator.up()
         record = orchestrator.context.load_state().record("api")
         assert record is not None
 
-        os.killpg(record.process_group or record.pid, signal.SIGKILL)
+        hard_kill_outside_devbox(record.pid, record.process_group)
         assert wait_until(lambda: not port_open(port))
 
         assert not orchestrator.ps()[0].running

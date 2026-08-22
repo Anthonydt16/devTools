@@ -16,6 +16,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from tests.conftest import minimal_child_environment
 
 from devbox.config.models import RuntimeRequirement
 from devbox.errors import IntegrityError, RegistryError, RuntimeInstallError
@@ -93,7 +94,7 @@ class TestInstall:
             [sys.executable, str(root / "runtime_main.py"), "--version"],
             capture_output=True,
             text=True,
-            env={"DEVBOX_FAKE_RUNTIME_VERSION": "18.19.0", "PATH": "/usr/bin:/bin"},
+            env=minimal_child_environment(DEVBOX_FAKE_RUNTIME_VERSION="18.19.0"),
             check=False,
             timeout=30,
         )

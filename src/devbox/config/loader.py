@@ -444,12 +444,26 @@ def _infer_port(healthcheck: Healthcheck | None) -> int | None:
 
 
 _IDENTIFIER_EXTRA = frozenset("-_.")
+MAX_IDENTIFIER_LENGTH = 64
+"""Names become directory names, log-file names and Win32 object names.
+
+Windows bounds a path at 260 characters by default and an object name at
+MAX_PATH, so an unbounded name would fail at start-up on the target platform
+rather than here.
+"""
 
 
 def _validate_identifier(node: Node, name: str, label: str) -> None:
     """Names become directory and log-file components, so keep them boring."""
     if not name:
         node.error(f"{label} must not be empty")
+        return
+    if len(name) > MAX_IDENTIFIER_LENGTH:
+        node.error(
+            f"{label} {name!r} is {len(name)} characters; the limit is "
+            f"{MAX_IDENTIFIER_LENGTH} because it becomes a directory name and a "
+            "Windows object name"
+        )
         return
     if not all(char.isalnum() or char in _IDENTIFIER_EXTRA for char in name):
         node.error(f"invalid {label} {name!r}: use letters, digits, '-', '_' and '.' only")

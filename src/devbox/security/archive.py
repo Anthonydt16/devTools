@@ -25,8 +25,6 @@ A failure therefore leaves no partial install behind.
 
 from __future__ import annotations
 
-import os
-import shutil
 import stat
 import tarfile
 import zipfile
@@ -36,6 +34,7 @@ from pathlib import Path
 from typing import IO, Final
 
 from devbox.errors import SecurityError
+from devbox.host.files import remove_tree, set_executable
 from devbox.security.paths import normalise_archive_member, resolve_within
 
 __all__ = [
@@ -120,7 +119,7 @@ def extract_archive(
     staging = Path(
         # A sibling of the destination guarantees the final move is on the same
         # volume, so it is atomic rather than a copy that can half-fail.
-        staging_root / f".{destination.name}.extracting-{os.getpid()}"
+        staging_root / f".{destination.name}.extracting-{_process_id()}"
     )
     _remove(staging)
     staging.mkdir(parents=True)
@@ -136,8 +135,7 @@ def extract_archive(
         if strip_single_root:
             source, stripped = _strip_single_root(staging)
 
-        _remove(destination)
-        source.replace(destination)
+        _replace_directory(source, destination)
         return ExtractionResult(
             destination=destination,
             entries=entries,
@@ -202,18 +200,14 @@ def _zip_entry_is_symlink(info: zipfile.ZipInfo) -> bool:
 
 
 def _apply_zip_mode(info: zipfile.ZipInfo, target: Path) -> None:
-    """Preserve the executable bit on POSIX; Windows ignores it.
+    """Preserve the executable bit recorded in the archive.
 
-    Without this, a runtime extracted on Linux (the test suite, and any CI job
-    that builds an artifact) would have a ``node`` that cannot be executed.
+    ``set_executable`` is a no-op on Windows, so this module does not need to
+    know which platform it is on — that question has exactly one home.
     """
     mode = info.external_attr >> 16
-    if not mode or os.name == "nt":
-        return
-    executable = stat.S_IMODE(mode) & 0o111
-    if executable:
-        current = target.stat().st_mode
-        target.chmod(current | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    if mode and stat.S_IMODE(mode) & 0o111:
+        set_executable(target)
 
 
 # ---------------------------------------------------------------------------
@@ -260,8 +254,8 @@ def _extract_tar_members(
             target.parent.mkdir(parents=True, exist_ok=True)
             # _copy_stream closes the stream; a `with` here would double-close.
             written += _copy_stream(member_stream, target, limits, written, member.name)
-            if os.name != "nt" and member.mode & 0o111:
-                target.chmod(target.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+            if member.mode & 0o111:
+                set_executable(target)
         return count, written
 
 
@@ -357,9 +351,45 @@ def _strip_single_root(staging: Path) -> tuple[Path, str]:
     return children[0], children[0].name
 
 
+def _process_id() -> int:
+    """Used only to make the staging directory name unique per process."""
+    import os
+
+    return os.getpid()
+
+
+def _replace_directory(source: Path, destination: Path) -> None:
+    """Move *source* onto *destination*, atomically, with a usable error.
+
+    On Windows a directory cannot be replaced while any file in it is open, and
+    ``rmtree`` half-succeeds instead of failing outright.  Without this check the
+    caller would see a bare ``FileExistsError`` from ``replace`` and have no idea
+    that the real cause is a service still running from the runtime being
+    reinstalled.
+    """
+    if destination.exists() and not remove_tree(destination, best_effort=True):
+        msg = f"cannot replace {destination}: it could not be removed"
+        raise SecurityError(
+            msg,
+            hint=(
+                "On Windows a directory cannot be replaced while a file in it is "
+                "open. Run 'devbox down' (and 'devbox infra down') first, then try "
+                "again."
+            ),
+        )
+    try:
+        source.replace(destination)
+    except OSError as exc:
+        msg = f"cannot move the extracted files into {destination}: {exc}"
+        raise SecurityError(
+            msg,
+            hint="Is a process still running from this directory?",
+        ) from exc
+
+
 def _remove(path: Path) -> None:
     if path.is_dir():
-        shutil.rmtree(path, ignore_errors=True)
+        remove_tree(path, best_effort=True)
     elif path.exists():
         path.unlink(missing_ok=True)
 

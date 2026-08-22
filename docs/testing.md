@@ -138,6 +138,7 @@ on a Linux container with neither Node version installed.
 | Build | reproducibility (byte-identical), manifest, lockfile digest, inclusion rules |
 | Autonomy | clean machine, empty cache, full cache, interrupted download, incomplete install, corrupt state, crash recovery, awkward paths |
 | Packaging | argv composition, every hidden import resolvable, no `__file__` at import time, no dynamic import of a computed name |
+| Windows contract (**on Linux**) | every `kernel32` call has a signature, `HANDLE` is pointer-sized, argument counts match Win32, no ANSI variants, no OS branching outside `host/`, no POSIX-only API in code or tests the Windows job runs, no hardcoded POSIX child environment |
 
 ## The ten non-regression rules
 

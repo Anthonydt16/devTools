@@ -20,6 +20,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
+from tests.conftest import minimal_child_environment
 
 from devbox.config.loader import load_config
 from devbox.errors import ServiceStartError
@@ -109,7 +110,7 @@ def orchestrator(
         project_root=root,
         paths=devbox_home,
         platform=host_platform,
-        environ={"PATH": "/usr/bin:/bin"},
+        environ=minimal_child_environment(),
         supervisor=create_supervisor(),
         runner=SubprocessRunner(),
     )
@@ -247,7 +248,7 @@ class TestTheExampleFailsUsefully:
             project_root=root,
             paths=devbox_home,
             platform=host_platform,
-            environ={"PATH": "/usr/bin:/bin"},
+            environ=minimal_child_environment(),
             supervisor=create_supervisor(),
             runner=SubprocessRunner(),
         )

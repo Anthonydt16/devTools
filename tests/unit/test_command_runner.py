@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from tests.conftest import minimal_child_environment
 
 from devbox.errors import ProcessError
 from devbox.process.runner import CommandResult, RecordingRunner, SubprocessRunner
@@ -75,7 +76,7 @@ class TestSubprocessRunner:
     def test_the_environment_is_replaced_not_merged(self) -> None:
         result = SubprocessRunner().run(
             [sys.executable, "-c", "import os; print(os.environ.get('DEVBOX_MARKER', 'absent'))"],
-            env={"DEVBOX_MARKER": "present", "PATH": "/usr/bin:/bin"},
+            env=minimal_child_environment(DEVBOX_MARKER="present"),
         )
         assert result.stdout.strip() == "present"
 

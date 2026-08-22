@@ -13,7 +13,6 @@ registry keys, no system ``PATH``, no elevation.
 
 from __future__ import annotations
 
-import shutil
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +20,7 @@ from pathlib import Path
 from devbox.catalogs.runtime_kinds import runtime_kind
 from devbox.config.models import RuntimeRequirement
 from devbox.errors import RuntimeInstallError
+from devbox.host.files import remove_tree
 from devbox.host.paths import DevboxPaths
 from devbox.host.platform_info import Platform, current_platform
 from devbox.lockfile.models import LockedRuntime, Lockfile
@@ -241,7 +241,10 @@ class RuntimeManager:
         root = self.install_root(name, version)
         if not root.is_dir():
             return False
-        shutil.rmtree(root, ignore_errors=False)
+        # remove_tree clears the read-only attribute Node and PostgreSQL
+        # archives set on some files, which plain rmtree cannot delete on
+        # Windows.
+        remove_tree(root)
         parent = root.parent
         if parent.is_dir() and not any(parent.iterdir()):
             parent.rmdir()
@@ -253,7 +256,7 @@ class RuntimeManager:
         for runtime in self.list_installed():
             if runtime.complete:
                 continue
-            shutil.rmtree(runtime.root, ignore_errors=True)
+            remove_tree(runtime.root, best_effort=True)
             removed.append(f"{runtime.name} {runtime.version}")
         return tuple(removed)
 

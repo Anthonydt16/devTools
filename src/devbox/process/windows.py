@@ -20,11 +20,22 @@ Design points, all of which matter and none of which are obvious:
     foreground mode (``devbox up --attach``), where Ctrl-C should take everything
     down with it.
 
-**Graceful first.**
-    The child is created with ``CREATE_NEW_PROCESS_GROUP``, so Devbox can send
-    ``CTRL_BREAK_EVENT`` to the group and let a well-behaved server flush and
-    close its listeners.  ``TerminateJobObject`` is the escalation, after
-    ``stop_timeout``.
+**Graceful stop is only possible in foreground mode, and that is a trade-off,
+not an omission.**
+    ``GenerateConsoleCtrlEvent`` — what ``os.kill(pid, CTRL_BREAK_EVENT)`` calls
+    — signals process groups attached to the *caller's* console.  A detached
+    service is created with ``CREATE_NO_WINDOW`` precisely so that it has no
+    console shared with Devbox and survives the terminal being closed, which
+    also means no console control event can reach it.  Sending one anyway would
+    at best do nothing and at worst succeed without delivering, making every
+    ``devbox down`` wait the full ``stop_timeout`` for a signal nobody received.
+
+    So: a detached service is stopped with ``TerminateJobObject``.  Graceful
+    shutdown where it actually matters — a database mid-checkpoint — is done by
+    the provider's own stop command (``pg_ctl stop -m fast``,
+    ``mysqladmin shutdown``), which is both available and more correct than a
+    console event.  In foreground mode the child shares Devbox's console, and
+    then Ctrl-Break is sent first.
 
 **The assignment race.**
     ``subprocess.Popen`` does not expose the primary thread handle, so a process
@@ -55,18 +66,35 @@ from devbox.security.command import creation_flags
 __all__ = ["WindowsSupervisor", "job_object_name"]
 
 _JOB_NAME_PREFIX = "Local\\Devbox"
+MAX_OBJECT_NAME = 255
+"""Win32 object names are bounded by MAX_PATH; 255 leaves room for the prefix."""
+
+_MAX_SERVICE_PART = 40
 
 
 def job_object_name(project_id: str, service_id: str) -> str:
     """Deterministic per-service Job Object name, valid as a Win32 object name.
 
-    Project and service names may contain characters that are illegal in an
-    object name (and ``\\`` would change the namespace), so the project part is
-    hashed.  Deterministic, because a later ``devbox down`` must derive the same
-    name from the same project.
+    Three things have to hold at once, and the third is easy to miss:
+
+    * **legal** — project and service names may contain characters that are
+      illegal in an object name, and a ``\\`` would change the namespace
+      entirely, so the project is hashed and the service is sanitised;
+    * **deterministic** — a later ``devbox down`` must derive the same name from
+      the same project, or it cannot reach the job;
+    * **bounded** — an object name longer than MAX_PATH makes
+      ``CreateJobObjectW`` fail.  A long service name is therefore truncated and
+      given a short digest of its full value, so two long names that share a
+      prefix still get two different jobs.
     """
     digest = hashlib.sha256(project_id.encode("utf-8")).hexdigest()[:16]
     safe_service = "".join(char if char.isalnum() or char in "-_." else "_" for char in service_id)
+    if len(safe_service) > _MAX_SERVICE_PART:
+        suffix = hashlib.sha256(service_id.encode("utf-8")).hexdigest()[:8]
+        safe_service = f"{safe_service[: _MAX_SERVICE_PART - 9]}-{suffix}"
+    # Prefix (13) + digest (16) + separators + service (<= 40) is always well
+    # inside MAX_OBJECT_NAME; the test pins that so a future change cannot
+    # quietly break it.
     return f"{_JOB_NAME_PREFIX}-{digest}-{safe_service}"
 
 
@@ -77,6 +105,10 @@ class WindowsSupervisor(BaseSupervisor):
         super().__init__(clock=clock)
         self._jobs: dict[str, winapi.JobObject] = {}
         self._project_id = ""
+        # Services started in foreground mode share Devbox's console and can
+        # therefore be Ctrl-Break'd; detached ones cannot.  See the module
+        # docstring.
+        self._console_attached: set[str] = set()
 
     @property
     def name(self) -> str:
@@ -99,8 +131,17 @@ class WindowsSupervisor(BaseSupervisor):
         return super().start(spec, project_id=project_id)
 
     def _launch_options(self, spec: LaunchSpec) -> LaunchOptions:
-        del spec
-        return LaunchOptions(creation_flags=creation_flags(new_process_group=True))
+        foreground = spec.kill_on_supervisor_exit
+        if foreground:
+            self._console_attached.add(spec.name)
+        else:
+            self._console_attached.discard(spec.name)
+        return LaunchOptions(
+            creation_flags=creation_flags(
+                new_process_group=True,
+                own_console=not foreground,
+            )
+        )
 
     def _after_start(self, spec: LaunchSpec, process: subprocess.Popen[bytes]) -> StartupExtras:
         """Create the job and put the child in it, as early as possible."""
@@ -123,8 +164,16 @@ class WindowsSupervisor(BaseSupervisor):
         return StartupExtras(job_name=name, process_group=process.pid)
 
     def _signal_graceful(self, record: ProcessRecord) -> bool:
-        """Ctrl-Break the process group so servers can shut down cleanly."""
+        """Ctrl-Break the process group, when the process can actually receive it.
+
+        Returning ``False`` makes the caller terminate the job immediately
+        instead of waiting ``stop_timeout`` for an event that was never
+        delivered — which is what would happen for every detached service, since
+        those deliberately have no console shared with Devbox.
+        """
         if not is_windows():  # pragma: no cover - guard for accidental use
+            return False
+        if record.service_id not in self._console_attached:
             return False
         try:
             os.kill(record.pid, signal.CTRL_BREAK_EVENT)  # type: ignore[attr-defined]
@@ -164,4 +213,5 @@ class WindowsSupervisor(BaseSupervisor):
         for job in self._jobs.values():
             job.close()
         self._jobs.clear()
+        self._console_attached.clear()
         super().close()

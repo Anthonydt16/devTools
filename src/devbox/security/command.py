@@ -144,17 +144,35 @@ CREATE_NO_WINDOW = 0x08000000
 CREATE_NEW_PROCESS_GROUP = 0x00000200
 
 
-def creation_flags(*, new_process_group: bool = True) -> int:
+def creation_flags(*, new_process_group: bool = True, own_console: bool = True) -> int:
     """Windows ``creationflags`` for a supervised child.
 
-    ``CREATE_NO_WINDOW`` stops a console window flashing for every service, and
-    ``CREATE_NEW_PROCESS_GROUP`` lets Devbox send Ctrl-Break for a graceful stop
-    before falling back to terminating the job object.  Zero on POSIX, where the
-    supervisor uses process groups instead.
+    The two flags interact, and the interaction is the whole design:
+
+    ``CREATE_NEW_PROCESS_GROUP``
+        Always set.  It keeps a Ctrl-C typed in Devbox's own console from
+        reaching the services, and it is what makes a group the unit a console
+        control event can address.
+
+    ``CREATE_NO_WINDOW`` (*own_console*)
+        Set for **detached** services.  The child then has no console shared
+        with Devbox, so it survives the terminal window being closed — which is
+        what "detached" has to mean.  The cost is that a console control event
+        can no longer reach it: ``GenerateConsoleCtrlEvent`` only signals process
+        groups attached to the *caller's* console.  Devbox therefore stops such a
+        service by terminating its job object, and graceful shutdown where it
+        matters — databases — goes through the provider's own stop command
+        (``pg_ctl stop -m fast``, ``mysqladmin shutdown``).
+
+        Cleared in **foreground** mode, where the child shares Devbox's console:
+        Ctrl-Break then works and is used before terminating, and closing the
+        terminal takes everything down, which is what foreground means.
+
+    Zero on POSIX, where the supervisor signals the process group instead.
     """
     if not is_windows():
         return 0
-    flags = CREATE_NO_WINDOW
+    flags = CREATE_NO_WINDOW if own_console else 0
     if new_process_group:
         flags |= CREATE_NEW_PROCESS_GROUP
     return flags

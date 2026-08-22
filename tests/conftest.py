@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -199,6 +200,55 @@ def http_registry_server(fake_registry: FakeRegistry) -> Iterator[str]:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+# ---------------------------------------------------------------------------
+# child environments
+# ---------------------------------------------------------------------------
+def minimal_child_environment(**extra: str) -> dict[str, str]:
+    """A minimal but *valid* environment for a Python child on this platform.
+
+    Hardcoding ``PATH=/usr/bin:/bin`` looks harmless and is not: a Python child
+    on Windows that inherits no ``SystemRoot`` fails to initialise — sockets and
+    the random seed both need it — so the whole integration suite would die on
+    the target platform for a reason that has nothing to do with Devbox.
+    """
+    environment: dict[str, str] = {}
+    if sys.platform == "win32":
+        for name in ("SystemRoot", "SystemDrive", "TEMP", "TMP", "PATHEXT", "COMSPEC"):
+            value = os.environ.get(name)
+            if value:
+                environment[name] = value
+        environment.setdefault("PATH", os.environ.get("PATH", ""))
+    else:
+        environment["PATH"] = "/usr/bin:/bin"
+    environment.update(extra)
+    return environment
+
+
+@pytest.fixture
+def child_environment() -> Callable[..., dict[str, str]]:
+    """Build a child environment that works on this platform."""
+    return minimal_child_environment
+
+
+@pytest.fixture
+def hard_kill_outside_devbox() -> Callable[[int, int], None]:
+    """Kill a supervised process the way an external `kill -9` or `taskkill` would.
+
+    Used to simulate a service dying behind Devbox's back.  ``os.killpg`` does
+    not exist on Windows, so the platform question is answered once, here.
+    """
+
+    def _kill(pid: int, process_group: int = 0) -> None:
+        if sys.platform == "win32":
+            # os.kill with any signal other than CTRL_C/CTRL_BREAK calls
+            # TerminateProcess, which is what taskkill /F does.
+            os.kill(pid, signal.SIGTERM)
+            return
+        os.killpg(process_group or pid, signal.SIGKILL)
+
+    return _kill
 
 
 # ---------------------------------------------------------------------------

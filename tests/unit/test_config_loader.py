@@ -306,6 +306,13 @@ class TestCrossReferenceErrors:
         message = expect_error("version: 1\nservices:\n  'bad/name':\n    command: x\n")
         assert "invalid service name 'bad/name'" in message
 
+    def test_an_overlong_identifier_is_refused(self) -> None:
+        """It becomes a directory name and a Windows object name."""
+        long_name = "a" * 70
+        message = expect_error(f"version: 1\nservices:\n  {long_name}:\n    command: x\n")
+        assert "is 70 characters" in message
+        assert "64" in message
+
 
 class TestInterpolationValidation:
     def test_unknown_database_reference(self) -> None:

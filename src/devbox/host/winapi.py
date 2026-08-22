@@ -86,10 +86,69 @@ def _last_error() -> int:
     return int(ctypes.get_last_error())  # type: ignore[attr-defined]
 
 
+# ---------------------------------------------------------------------------
+# Function signatures
+# ---------------------------------------------------------------------------
+# Declaring argtypes and restype is not optional on 64-bit Windows.  Without
+# them ctypes assumes ``restype = c_int`` — 32 bits — while HANDLE is a 64-bit
+# pointer, so every handle returned by OpenProcess, CreateJobObjectW and
+# OpenJobObjectW is silently truncated and sign-extended.  Handle values are
+# usually small enough to survive that by luck, which is exactly what makes the
+# bug expensive: it works on the developer's machine and fails on somebody
+# else's.  The same applies on the way in, where a handle passed as a C int
+# loses its upper half.
+#
+# HANDLE is declared as c_void_p so a NULL return arrives as None and
+# ``if not handle`` is correct for both success and failure.
+
+_HANDLE = ctypes.c_void_p
+_DWORD = ctypes.c_uint32
+_BOOL = ctypes.c_int32
+_LPCWSTR = ctypes.c_wchar_p
+_LPVOID = ctypes.c_void_p
+
+SIGNATURES: Final[dict[str, tuple[Any, tuple[Any, ...]]]] = {
+    # HANDLE OpenProcess(DWORD access, BOOL inherit, DWORD pid)
+    "OpenProcess": (_HANDLE, (_DWORD, _BOOL, _DWORD)),
+    # BOOL GetProcessTimes(HANDLE, LPFILETIME x4)
+    "GetProcessTimes": (_BOOL, (_HANDLE, _LPVOID, _LPVOID, _LPVOID, _LPVOID)),
+    # BOOL GetExitCodeProcess(HANDLE, LPDWORD)
+    "GetExitCodeProcess": (_BOOL, (_HANDLE, _LPVOID)),
+    # BOOL CloseHandle(HANDLE)
+    "CloseHandle": (_BOOL, (_HANDLE,)),
+    # HANDLE CreateJobObjectW(LPSECURITY_ATTRIBUTES, LPCWSTR name)
+    "CreateJobObjectW": (_HANDLE, (_LPVOID, _LPCWSTR)),
+    # HANDLE OpenJobObjectW(DWORD access, BOOL inherit, LPCWSTR name)
+    "OpenJobObjectW": (_HANDLE, (_DWORD, _BOOL, _LPCWSTR)),
+    # BOOL SetInformationJobObject(HANDLE, JOBOBJECTINFOCLASS, LPVOID, DWORD)
+    "SetInformationJobObject": (_BOOL, (_HANDLE, _DWORD, _LPVOID, _DWORD)),
+    # BOOL AssignProcessToJobObject(HANDLE job, HANDLE process)
+    "AssignProcessToJobObject": (_BOOL, (_HANDLE, _HANDLE)),
+    # BOOL TerminateJobObject(HANDLE, UINT exit_code)
+    "TerminateJobObject": (_BOOL, (_HANDLE, _DWORD)),
+}
+"""Every kernel32 function Devbox calls, with its exact C signature.
+
+``tests/unit/test_winapi_signatures.py`` parses this module and asserts that the
+set of functions actually called matches this table, so a call added without a
+signature fails on Linux rather than misbehaving on Windows.
+"""
+
+
 def _kernel32() -> Any:
-    """Return ``kernel32`` with ``last_error`` propagation enabled."""
+    """Return ``kernel32`` with signatures applied and ``last_error`` enabled.
+
+    A fresh ``WinDLL`` handle is cheap (the DLL is already loaded and cached by
+    ctypes), and applying the signatures every time keeps this the single place
+    where a call is configured.
+    """
     _require_windows("Win32 access")
-    return ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+    library = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+    for name, (restype, argtypes) in SIGNATURES.items():
+        function = getattr(library, name)
+        function.restype = restype
+        function.argtypes = list(argtypes)
+    return library
 
 
 class _FILETIME(ctypes.Structure):

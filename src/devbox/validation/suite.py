@@ -32,7 +32,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from devbox.host.platform_info import is_windows
+from devbox.host.platform_info import current_platform, is_windows
 from devbox.process.runner import CommandRunner, SubprocessRunner
 from devbox.validation.checks import (
     Check,
@@ -274,5 +274,5 @@ class ValidationSuite:
         return ValidationReport(
             results=tuple(results),
             duration=time.monotonic() - started,
-            platform=sys.platform,
+            platform=current_platform().tag,
         )

@@ -21,6 +21,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
+from tests.conftest import minimal_child_environment
 
 from devbox.config.loader import load_config
 from devbox.errors import ServiceStartError
@@ -182,12 +183,11 @@ def make_orchestrator(
         project_root=project,
         paths=devbox_home,
         platform=host_platform,
-        environ={
-            "PATH": "/usr/bin:/bin",
+        environ=minimal_child_environment(
             # Lets devbox.yml point at the installed runtime without hardcoding
             # a machine-specific path in the fixture.
-            "DEVBOX_TEST_RUNTIME": str(devbox_home.runtimes),
-        },
+            DEVBOX_TEST_RUNTIME=str(devbox_home.runtimes),
+        ),
         supervisor=create_supervisor(),
         runner=SubprocessRunner(),
     )

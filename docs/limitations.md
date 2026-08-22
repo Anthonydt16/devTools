@@ -44,6 +44,40 @@ first thing to check on a real machine — see the README procedure.
 
 ## 3. Known imperfections
 
+### What review of the Windows paths turned up
+
+An audit of the Windows-specific code — conducted *after* the first "it is
+finished" report, and worth recording rather than quietly fixing — found seven
+real defects. All are fixed and each now has a test that runs on Linux:
+
+1. no `argtypes`/`restype` on any `kernel32` call, truncating 64-bit `HANDLE`
+   values;
+2. `security/archive.py` branching on `os.name`, violating the project's own
+   rule and leaving the Windows branch unexercised;
+3. `shutil.rmtree` on read-only files, which fails on Windows and which Node and
+   PostgreSQL archives both produce;
+4. a locked destination directory turning into a bare `FileExistsError` instead
+   of "a service is still running from this runtime";
+5. `os.killpg` and `signal.SIGKILL` in a test the `windows-latest` job runs —
+   an `AttributeError` there, not a failure of Devbox but a false green;
+6. integration tests handing children `PATH=/usr/bin:/bin` and no `SystemRoot`,
+   which stops a Python child from starting at all on Windows;
+7. a long service name producing a Job Object name past the Win32 limit.
+
+Nothing in that list was found by the 613 tests that were passing; they were
+found by reading the code with the target platform in mind. That is the honest
+measure of how much a green Linux suite says about Windows.
+
+### Graceful shutdown is unavailable for detached services
+
+A detached service has no console shared with Devbox — that is what lets it
+survive the terminal closing — and a console control event cannot reach a
+process without one.  So `devbox down` terminates its job object rather than
+asking politely first.  For a Node dev server that is harmless; for a database
+it would not be, which is why PostgreSQL and MySQL are stopped with their own
+commands instead.  Foreground mode does send Ctrl-Break.  Full reasoning in
+[windows.md](windows.md).
+
 ### The Job Object assignment race
 
 `subprocess.Popen` does not expose the primary thread handle, so a process cannot

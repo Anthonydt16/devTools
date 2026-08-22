@@ -25,12 +25,14 @@ Run it with::
 
 from __future__ import annotations
 
-import shutil
 import subprocess
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from devbox.host.files import remove_tree
+from devbox.host.platform_info import current_platform
 
 __all__ = ["BuildOptions", "build", "hidden_imports", "pyinstaller_arguments"]
 
@@ -146,7 +148,7 @@ def build(options: BuildOptions | None = None, *, argv: Sequence[str] | None = N
         check=False,
     )
     if completed.returncode == 0:
-        suffix = ".exe" if sys.platform == "win32" else ""
+        suffix = current_platform().executable_suffix
         produced = settings.dist_dir / f"{settings.name}{suffix}"
         print(f"\nBuilt {produced}")
         if produced.is_file():
@@ -157,7 +159,7 @@ def build(options: BuildOptions | None = None, *, argv: Sequence[str] | None = N
 def clean(options: BuildOptions | None = None) -> None:
     """Remove build artifacts."""
     settings = options or BuildOptions()
-    shutil.rmtree(settings.work_dir, ignore_errors=True)
+    remove_tree(settings.work_dir, best_effort=True)
 
 
 def main() -> int:
