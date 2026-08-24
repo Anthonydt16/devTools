@@ -329,9 +329,14 @@ class TestDevboxTestCommand:
         assert "packaging" in out
         assert "lint" not in out
 
-    def test_the_summary_reports_skipped_tests_and_why(self, cli: CliRun, tmp_path: Path) -> None:
+    def test_the_summary_reports_skipped_tests_and_why(
+        self, cli: CliRun, tmp_path: Path, host_platform: Platform
+    ) -> None:
         repository = Path(__file__).resolve().parents[2]
         code, out, err = cli("test", "--only", "windows", "--root", str(repository))
         assert code == ExitCode.OK, err
-        assert "Skipped:" in out
-        assert "requires a real Windows host" in out
+        if host_platform.is_windows:
+            assert "Skipped:" not in out
+        else:
+            assert "Skipped:" in out
+            assert "requires a real Windows host" in out

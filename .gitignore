@@ -1,22 +1,44 @@
-# Python
+# Python bytecode and package metadata
 __pycache__/
 *.py[cod]
 *.egg-info/
-.eggs/
-build/
-dist/
-.venv/
-venv/
+/.eggs/
 
-# Tooling
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.coverage
-coverage.xml
-htmlcov/
+# Local Python environments
+/.venv/
+/.venv-build/
+/venv/
+/.python-version
 
-# Devbox
+# Test, coverage, type-checker, and linter caches
+/.pytest_cache/
+/.mypy_cache/
+/.ruff_cache/
+/.coverage
+/.coverage.*
+/coverage.xml
+/htmlcov/
+
+# Release and PyInstaller output (generated from the repository root)
+/build/
+/dist/
+
+# Local Devbox state and interrupted downloads
 .devbox/
 *.tmp
 *.part
+
+# Local analysis output
+/graphify-out/
+
+# Developer-specific settings and OS metadata
+/.idea/
+/.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local secrets; keep documented examples versioned
+.env
+.env.*
+!.env.example

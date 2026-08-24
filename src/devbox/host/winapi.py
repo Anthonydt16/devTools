@@ -32,22 +32,33 @@ from __future__ import annotations
 
 import ctypes
 import sys
-from typing import Any, Final, cast
+from typing import Any, Final
 
 from devbox.errors import ProcessError, UnsupportedPlatformError
 from devbox.host.platform_info import is_windows
 
 __all__ = [
     "JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE",
+    "CapturedProcess",
     "JobObject",
+    "capture_descendant_processes",
     "process_creation_time",
     "process_is_alive",
+    "resume_process_threads",
 ]
 
 # -- access rights -----------------------------------------------------------
 PROCESS_QUERY_LIMITED_INFORMATION: Final = 0x1000
 PROCESS_TERMINATE: Final = 0x0001
 PROCESS_SET_QUOTA: Final = 0x0100
+THREAD_SUSPEND_RESUME: Final = 0x0002
+
+# -- toolhelp thread snapshots ----------------------------------------------
+TH32CS_SNAPTHREAD: Final = 0x00000004
+TH32CS_SNAPPROCESS: Final = 0x00000002
+ERROR_NO_MORE_FILES: Final = 18
+_RESUME_THREAD_FAILED: Final = 0xFFFFFFFF
+_INVALID_HANDLE_VALUE: Final = ctypes.c_void_p(-1).value
 
 # -- job object -------------------------------------------------------------
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: Final = 0x00002000
@@ -126,6 +137,22 @@ SIGNATURES: Final[dict[str, tuple[Any, tuple[Any, ...]]]] = {
     "AssignProcessToJobObject": (_BOOL, (_HANDLE, _HANDLE)),
     # BOOL TerminateJobObject(HANDLE, UINT exit_code)
     "TerminateJobObject": (_BOOL, (_HANDLE, _DWORD)),
+    # HANDLE CreateToolhelp32Snapshot(DWORD flags, DWORD process_id)
+    "CreateToolhelp32Snapshot": (_HANDLE, (_DWORD, _DWORD)),
+    # BOOL Thread32First(HANDLE snapshot, LPTHREADENTRY32 entry)
+    "Thread32First": (_BOOL, (_HANDLE, _LPVOID)),
+    # BOOL Thread32Next(HANDLE snapshot, LPTHREADENTRY32 entry)
+    "Thread32Next": (_BOOL, (_HANDLE, _LPVOID)),
+    # BOOL Process32FirstW(HANDLE snapshot, LPPROCESSENTRY32W entry)
+    "Process32FirstW": (_BOOL, (_HANDLE, _LPVOID)),
+    # BOOL Process32NextW(HANDLE snapshot, LPPROCESSENTRY32W entry)
+    "Process32NextW": (_BOOL, (_HANDLE, _LPVOID)),
+    # HANDLE OpenThread(DWORD access, BOOL inherit, DWORD thread_id)
+    "OpenThread": (_HANDLE, (_DWORD, _BOOL, _DWORD)),
+    # DWORD ResumeThread(HANDLE thread)
+    "ResumeThread": (_DWORD, (_HANDLE,)),
+    # BOOL TerminateProcess(HANDLE process, UINT exit_code)
+    "TerminateProcess": (_BOOL, (_HANDLE, _DWORD)),
 }
 """Every kernel32 function Devbox calls, with its exact C signature.
 
@@ -157,6 +184,37 @@ class _FILETIME(ctypes.Structure):
     def as_posix_timestamp(self) -> float:
         raw = (int(self.dwHighDateTime) << 32) | int(self.dwLowDateTime)
         return (raw - _FILETIME_EPOCH_DELTA) / _FILETIME_TICKS_PER_SECOND
+
+
+class _THREADENTRY32(ctypes.Structure):
+    """Pointer-width-independent layout from ``tlhelp32.h``."""
+
+    _fields_ = (
+        ("dwSize", ctypes.c_uint32),
+        ("cntUsage", ctypes.c_uint32),
+        ("th32ThreadID", ctypes.c_uint32),
+        ("th32OwnerProcessID", ctypes.c_uint32),
+        ("tpBasePri", ctypes.c_int32),
+        ("tpDeltaPri", ctypes.c_int32),
+        ("dwFlags", ctypes.c_uint32),
+    )
+
+
+class _PROCESSENTRY32W(ctypes.Structure):
+    """Pointer-width-correct layout from ``tlhelp32.h``."""
+
+    _fields_ = (
+        ("dwSize", ctypes.c_uint32),
+        ("cntUsage", ctypes.c_uint32),
+        ("th32ProcessID", ctypes.c_uint32),
+        ("th32DefaultHeapID", ctypes.c_size_t),
+        ("th32ModuleID", ctypes.c_uint32),
+        ("cntThreads", ctypes.c_uint32),
+        ("th32ParentProcessID", ctypes.c_uint32),
+        ("pcPriClassBase", ctypes.c_int32),
+        ("dwFlags", ctypes.c_uint32),
+        ("szExeFile", ctypes.c_wchar * 260),
+    )
 
 
 class _IO_COUNTERS(ctypes.Structure):
@@ -206,22 +264,26 @@ def process_creation_time(pid: int) -> float | None:
     if not handle:
         return None
     try:
-        creation = _FILETIME()
-        exit_time = _FILETIME()
-        kernel_time = _FILETIME()
-        user_time = _FILETIME()
-        ok = kernel32.GetProcessTimes(
-            handle,
-            ctypes.byref(creation),
-            ctypes.byref(exit_time),
-            ctypes.byref(kernel_time),
-            ctypes.byref(user_time),
-        )
-        if not ok:
-            return None
-        return creation.as_posix_timestamp()
+        return _creation_time_from_handle(kernel32, handle)
     finally:
         kernel32.CloseHandle(handle)
+
+
+def _creation_time_from_handle(kernel32: Any, handle: int) -> float | None:
+    creation = _FILETIME()
+    exit_time = _FILETIME()
+    kernel_time = _FILETIME()
+    user_time = _FILETIME()
+    ok = kernel32.GetProcessTimes(
+        handle,
+        ctypes.byref(creation),
+        ctypes.byref(exit_time),
+        ctypes.byref(kernel_time),
+        ctypes.byref(user_time),
+    )
+    if not ok:
+        return None
+    return creation.as_posix_timestamp()
 
 
 def process_is_alive(pid: int) -> bool:
@@ -243,6 +305,183 @@ def process_is_alive(pid: int) -> bool:
         kernel32.CloseHandle(handle)
 
 
+def resume_process_threads(pid: int) -> None:
+    """Resume every initial thread of a process created with ``CREATE_SUSPENDED``.
+
+    ``subprocess.Popen`` closes the primary thread handle before returning, so
+    Devbox cannot call ``ResumeThread`` on that handle directly.  A Toolhelp
+    snapshot is the documented way to recover the thread ID.  Before the
+    primary thread is resumed it cannot execute user code or create a child,
+    which makes assigning the process to a Job Object race-free.
+
+    The function fails closed: if the process has no discoverable/resumable
+    thread, the supervisor terminates it instead of leaving a suspended or
+    unsupervised service behind.
+    """
+    _require_windows("resume_process_threads")
+    kernel32 = _kernel32()
+    snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)
+    if not snapshot or int(snapshot) == _INVALID_HANDLE_VALUE:
+        raise _win32_error(f"CreateToolhelp32Snapshot failed for pid {pid}")
+
+    resumed = 0
+    try:
+        entry = _THREADENTRY32()
+        entry.dwSize = ctypes.sizeof(entry)
+        if not kernel32.Thread32First(snapshot, ctypes.byref(entry)):
+            raise _win32_error(f"Thread32First failed for pid {pid}")
+
+        while True:
+            if int(entry.th32OwnerProcessID) == pid:
+                thread_id = int(entry.th32ThreadID)
+                thread = kernel32.OpenThread(THREAD_SUSPEND_RESUME, False, thread_id)
+                if not thread:
+                    raise _win32_error(f"OpenThread failed for thread {thread_id} of pid {pid}")
+                try:
+                    previous_count = int(kernel32.ResumeThread(thread))
+                    if previous_count == _RESUME_THREAD_FAILED:
+                        raise _win32_error(
+                            f"ResumeThread failed for thread {thread_id} of pid {pid}"
+                        )
+                    # CREATE_SUSPENDED adds one suspension.  If another actor
+                    # added one before this point, fully resume our brand-new
+                    # process rather than silently leaving the service hung.
+                    while previous_count > 1:
+                        previous_count = int(kernel32.ResumeThread(thread))
+                        if previous_count == _RESUME_THREAD_FAILED:
+                            raise _win32_error(
+                                f"ResumeThread failed for thread {thread_id} of pid {pid}"
+                            )
+                    resumed += 1
+                finally:
+                    kernel32.CloseHandle(thread)
+
+            if kernel32.Thread32Next(snapshot, ctypes.byref(entry)):
+                continue
+            error = _last_error()
+            if error != ERROR_NO_MORE_FILES:
+                raise _win32_error(f"Thread32Next failed for pid {pid}")
+            break
+    finally:
+        kernel32.CloseHandle(snapshot)
+
+    if resumed == 0:
+        raise ProcessError(f"No initial thread found for suspended process {pid}")
+
+
+def _process_parents(kernel32: Any) -> dict[int, int]:
+    """Return a point-in-time ``pid -> parent pid`` map from Toolhelp."""
+    snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if not snapshot or int(snapshot) == _INVALID_HANDLE_VALUE:
+        raise _win32_error("CreateToolhelp32Snapshot failed for process tree")
+    try:
+        entry = _PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(entry)
+        if not kernel32.Process32FirstW(snapshot, ctypes.byref(entry)):
+            raise _win32_error("Process32FirstW failed for process tree")
+        parents: dict[int, int] = {}
+        while True:
+            parents[int(entry.th32ProcessID)] = int(entry.th32ParentProcessID)
+            if kernel32.Process32NextW(snapshot, ctypes.byref(entry)):
+                continue
+            error = _last_error()
+            if error != ERROR_NO_MORE_FILES:
+                raise _win32_error("Process32NextW failed for process tree")
+            return parents
+    finally:
+        kernel32.CloseHandle(snapshot)
+
+
+def _descendant_pids(parents: dict[int, int], root_pid: int) -> set[int]:
+    """Find descendants without following unrelated branches or parent cycles."""
+    descendants: set[int] = set()
+    frontier = {root_pid}
+    while frontier:
+        found = {
+            pid
+            for pid, parent_pid in parents.items()
+            if pid != root_pid and pid not in descendants and parent_pid in frontier
+        }
+        if not found:
+            break
+        descendants.update(found)
+        frontier = found
+    return descendants
+
+
+class CapturedProcess:
+    """A pinned, verified descendant process handle used during tree shutdown."""
+
+    __slots__ = ("_closed", "_handle", "_kernel32", "creation_time", "pid")
+
+    def __init__(self, handle: int, pid: int, creation_time: float, kernel32: Any) -> None:
+        self._handle = handle
+        self.pid = pid
+        self.creation_time = creation_time
+        self._kernel32 = kernel32
+        self._closed = False
+
+    def terminate(self, exit_code: int = 1) -> None:
+        if self._closed:
+            return
+        if not self._kernel32.TerminateProcess(self._handle, exit_code):
+            last = _last_error()
+            code = ctypes.c_uint32(STILL_ACTIVE)
+            exited = self._kernel32.GetExitCodeProcess(self._handle, ctypes.byref(code)) and (
+                int(code.value) != STILL_ACTIVE
+            )
+            if not exited and last not in (0, ERROR_INVALID_PARAMETER):
+                raise _win32_error(f"TerminateProcess failed for descendant pid {self.pid}")
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._kernel32.CloseHandle(self._handle)
+
+
+def capture_descendant_processes(
+    root_pid: int,
+    root_creation_time: float,
+) -> tuple[CapturedProcess, ...]:
+    """Pin descendants of a verified root before Job Object termination.
+
+    Two process snapshots surround handle acquisition.  A candidate is retained
+    only when its *current* PID still lies below ``root_pid`` in the second
+    snapshot and its creation time does not predate the verified root.  The open
+    handle pins that exact process object, so later PID reuse cannot redirect a
+    termination to an unrelated process.
+    """
+    _require_windows("capture_descendant_processes")
+    kernel32 = _kernel32()
+    initial = _descendant_pids(_process_parents(kernel32), root_pid)
+    opened: dict[int, CapturedProcess] = {}
+    access = PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | SYNCHRONIZE
+    try:
+        for pid in initial:
+            handle = kernel32.OpenProcess(access, False, pid)
+            if not handle:
+                continue
+            created = _creation_time_from_handle(kernel32, handle)
+            if created is None or created < root_creation_time:
+                kernel32.CloseHandle(handle)
+                continue
+            opened[pid] = CapturedProcess(int(handle), pid, created, kernel32)
+
+        current = _descendant_pids(_process_parents(kernel32), root_pid)
+        verified: list[CapturedProcess] = []
+        for pid, process in opened.items():
+            if pid in current:
+                verified.append(process)
+            else:
+                process.close()
+        return tuple(verified)
+    except Exception:
+        for process in opened.values():
+            process.close()
+        raise
+
+
 class JobObject:
     """An owned Windows Job Object used to supervise one process tree.
 
@@ -255,13 +494,9 @@ class JobObject:
         job.terminate()   # kills the process *and every descendant*
         job.close()
 
-    The window between ``CreateProcess`` and ``AssignProcessToJobObject`` is a
-    known, unavoidable race with plain ``subprocess.Popen``: a child spawned in
-    those microseconds would not inherit the job.  In practice interpreters and
-    package managers have not finished start-up by then.  Documented in
-    docs/windows.md, together with the ``CREATE_SUSPENDED`` alternative and why
-    it is not used (``Popen`` does not expose the primary thread handle needed to
-    resume the process).
+    Devbox creates the root process suspended, assigns it here, then resumes its
+    initial thread via :func:`resume_process_threads`.  No user code can run in
+    the interval, so descendants cannot escape between creation and assignment.
     """
 
     __slots__ = ("_closed", "_handle", "_kernel32", "name")
@@ -367,4 +602,4 @@ class JobObject:
 def _win32_error(operation: str) -> ProcessError:
     code = _last_error()
     message = ctypes.FormatError(code).strip()  # type: ignore[attr-defined]
-    return ProcessError(f"{operation}: [{code}] {cast(str, message)}")
+    return ProcessError(f"{operation}: [{code}] {message}")

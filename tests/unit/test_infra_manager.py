@@ -362,7 +362,7 @@ class TestCommandConstruction:
 
         context = _context_with_fake_binaries(devbox_home, tmp_path, "postgres", ("postgres",))
         argv = list(PostgresProvider().start_command(context))
-        assert argv[0].endswith("postgres")
+        assert Path(argv[0]).stem.lower() == "postgres"
         assert "-D" in argv
         assert str(context.data_dir) in argv
         assert "-p" in argv
@@ -401,7 +401,7 @@ class TestCommandConstruction:
             devbox_home, tmp_path, "mysql", ("mysqld",), port=3306
         )
         argv = list(MysqlProvider().start_command(context))
-        assert argv[0].endswith("mysqld")
+        assert Path(argv[0]).stem.lower() == "mysqld"
         assert f"--datadir={context.data_dir}" in argv
         assert "--port=3306" in argv
 
@@ -448,7 +448,7 @@ class TestCommandConstruction:
         )
         argv = MysqlProvider().stop_command(context)
         assert argv is not None
-        assert argv[0].endswith("mysqladmin")
+        assert Path(argv[0]).stem.lower() == "mysqladmin"
         assert "shutdown" in argv
 
     def test_mysql_lists_databases_one_per_line(

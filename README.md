@@ -1,4 +1,3 @@
-salut 
 # Devbox
 
 **A user-space runtime and process orchestrator for Windows 11.**
@@ -64,8 +63,33 @@ unit tests, integration tests, Windows tests, configuration and packaging. It
 exits non-zero if anything mandatory fails, and it tells you what it skipped and
 why.
 
-Prefer a single executable? `pip install -e ".[package]"` then
-`python -m devbox.packaging.build_exe` produces `dist\devbox.exe`.
+### Portable Windows executable
+
+Build the release with 64-bit Python 3.13 on Windows 11. PyInstaller embeds
+Python and the application dependencies, so the target PC does not need Python
+or administrator rights:
+
+```powershell
+py -3.13 -m venv .venv-build
+.venv-build\Scripts\python -m pip install -e ".[package]"
+.venv-build\Scripts\python -m devbox.packaging.build_exe
+.\dist\devbox.exe --help
+```
+
+Copy `dist\devbox.exe` to a user-writable directory on the target PC and launch
+it from the project directory, for example `C:\Users\<you>\Tools\devbox.exe up`.
+The adjacent `devbox.exe.sha256` file lets you verify that the transfer did not
+alter the executable:
+
+```powershell
+Get-FileHash .\devbox.exe -Algorithm SHA256
+Get-Content .\devbox.exe.sha256
+```
+
+The executable is not code-signed. Windows SmartScreen or a corporate
+application-control policy may therefore require the employer's normal approval
+process; Devbox itself never requests elevation or writes to protected system
+directories.
 
 ## Use
 

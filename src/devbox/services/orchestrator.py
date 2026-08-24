@@ -349,6 +349,9 @@ class Orchestrator:
 
         environment = self.build_service_environment(service, databases)
         argv, working_dir = self._resolve_invocation(service, databases)
+        resolved = environment.resolve_executable(argv[0])
+        if resolved is not None:
+            argv = (resolved, *argv[1:])
 
         self._emit(
             EventKind.PROGRESS,

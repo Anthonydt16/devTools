@@ -55,11 +55,14 @@ the `npm` PID orphans everything below it.  Devbox creates one Job Object per
 service with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, so the tree dies both on an
 explicit `TerminateJobObject` and if Devbox itself is killed.
 
-*Known race*: `subprocess.Popen` gives no way to start a process suspended and
-resume it (the primary thread handle is not exposed), so a descendant spawned
-between `CreateProcess` and `AssignProcessToJobObject` would escape the job.
-The window is microseconds and no real interpreter has finished start-up by
-then.  Documented in `docs/windows.md` and `docs/limitations.md`.
+*Race-free launch*: the root process is created with `CREATE_SUSPENDED`, assigned
+to the Job Object, then resumed through a Toolhelp thread snapshot.  Although
+`subprocess.Popen` closes the primary thread handle, its thread ID can be
+recovered with `Thread32First`/`Thread32Next` and opened for `ResumeThread`.
+User code therefore cannot create a descendant before Job Object assignment.
+Before stopping, a guarded Toolhelp process snapshot also pins the verified
+descendant chain; this is a fallback for outer host jobs that alter inheritance,
+while `TerminateJobObject` remains the primary mechanism.
 
 *Rejected*: `taskkill /T /F`.  It walks the parent-PID tree, which is unreliable
 once an intermediate process has exited, and it is exactly the "kill anything

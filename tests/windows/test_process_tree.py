@@ -6,6 +6,7 @@ runs for real on the ``windows-latest`` CI job.
 
 from __future__ import annotations
 
+import re
 import socket
 import time
 from collections.abc import Callable
@@ -198,6 +199,58 @@ class TestJobObjectTree:
             assert wait_until(lambda: not port_open(port))
         finally:
             fresh.close()
+
+    @pytest.mark.slow
+    def test_descendant_fallback_never_targets_an_unrelated_process(
+        self, windows_supervisor: WindowsSupervisor, launch: Callable[..., LaunchSpec]
+    ) -> None:
+        parent_port = free_port()
+        child_port = free_port()
+        unrelated_port = free_port()
+        tree = windows_supervisor.start(
+            launch(
+                "tree",
+                [
+                    "spawn-child",
+                    "--port",
+                    str(parent_port),
+                    "--child-port",
+                    str(child_port),
+                    "--max-seconds",
+                    "120",
+                ],
+            ),
+            project_id=PROJECT_ID,
+        )
+        unrelated = windows_supervisor.start(
+            launch(
+                "unrelated",
+                ["serve", "--port", str(unrelated_port), "--max-seconds", "120"],
+            ),
+            project_id=PROJECT_ID,
+        )
+        assert wait_until(lambda: port_open(parent_port))
+        assert wait_until(lambda: port_open(child_port))
+        assert wait_until(lambda: port_open(unrelated_port))
+        assert tree.creation_time is not None
+
+        text = Path(tree.stdout_log).read_text(encoding="utf-8")
+        match = re.search(r"spawned child pid (\d+)", text)
+        assert match is not None
+        child_pid = int(match.group(1))
+        captured = winapi.capture_descendant_processes(tree.pid, tree.creation_time)
+        try:
+            captured_pids = {process.pid for process in captured}
+            assert child_pid in captured_pids
+            assert unrelated.pid not in captured_pids
+            for process in captured:
+                process.terminate()
+        finally:
+            for process in captured:
+                process.close()
+
+        assert wait_until(lambda: not port_open(child_port))
+        assert process_is_alive(unrelated.pid), "an unrelated process was targeted"
 
 
 class TestPidReuse:

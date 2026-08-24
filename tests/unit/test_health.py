@@ -181,9 +181,16 @@ class TestTcpProbe:
 
     @pytest.mark.integration
     def test_a_closed_port_reports_that_nothing_is_listening(self, free_port) -> None:  # type: ignore[no-untyped-def]
-        ready, detail = TcpProbe("127.0.0.1", free_port()).attempt(0.5)
+        port = free_port()
+        ready, detail = TcpProbe("127.0.0.1", port).attempt(0.5)
         assert not ready
-        assert "nothing is listening" in detail
+        # Windows may time out while probing a recently released ephemeral
+        # port instead of returning ECONNREFUSED.  Both are valid diagnostics;
+        # keep the assertion exact so unrelated connection errors still fail.
+        assert detail in {
+            f"nothing is listening on 127.0.0.1:{port}",
+            f"connection to 127.0.0.1:{port} timed out after 0.5s",
+        }
 
     def test_an_unresolvable_host_is_reported_clearly(self) -> None:
         ready, detail = TcpProbe("devbox.invalid.example.", 1).attempt(0.5)

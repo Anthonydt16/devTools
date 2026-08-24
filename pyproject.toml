@@ -149,7 +149,7 @@ show_error_codes = true
 pretty = true
 
 [[tool.mypy.overrides]]
-module = ["devbox.process.windows", "devbox.platform.winapi"]
+module = ["devbox.host.winapi", "devbox.process.posix", "devbox.process.windows"]
 # ctypes windows bindings are unavailable on non-Windows CI; the module is
 # still fully typed but references win32 symbols mypy cannot resolve on Linux.
 warn_unused_ignores = false

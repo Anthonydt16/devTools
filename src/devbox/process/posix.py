@@ -56,7 +56,7 @@ class PosixSupervisor(BaseSupervisor):
         return self._signal_group(record, signal.SIGTERM)
 
     def _terminate_tree(self, record: ProcessRecord) -> None:
-        self._signal_group(record, signal.SIGKILL)
+        self._signal_group(record, signal.SIGKILL)  # type: ignore[attr-defined]
 
     def _signal_group(self, record: ProcessRecord, signum: int) -> bool:
         """Signal the whole group, falling back to the single PID.
@@ -66,7 +66,7 @@ class PosixSupervisor(BaseSupervisor):
         """
         group = record.process_group or record.pid
         try:
-            os.killpg(group, signum)
+            os.killpg(group, signum)  # type: ignore[attr-defined]
         except ProcessLookupError:
             try:
                 os.kill(record.pid, signum)

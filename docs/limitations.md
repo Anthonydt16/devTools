@@ -27,7 +27,7 @@ development container.  Nothing here is reported as verified from a Linux run.
 
 | Component | What is unverifiable locally |
 |---|---|
-| `host/winapi.py` | `GetProcessTimes`, `CreateJobObjectW`, `OpenJobObjectW`, `AssignProcessToJobObject`, `SetInformationJobObject`, `TerminateJobObject`, `GetExitCodeProcess`, `OpenProcess` |
+| `host/winapi.py` | `GetProcessTimes`, `CreateJobObjectW`, `OpenJobObjectW`, `AssignProcessToJobObject`, `SetInformationJobObject`, `TerminateJobObject`, `GetExitCodeProcess`, `OpenProcess`, `CreateToolhelp32Snapshot`, `Thread32First`/`Thread32Next`, `Process32FirstW`/`Process32NextW`, `OpenThread`, `ResumeThread`, `TerminateProcess` |
 | `process/windows.py` | job creation and assignment, `CTRL_BREAK_EVENT`, reopening a named job from a later invocation, tree termination |
 | `.cmd` shim resolution | the *rules* are unit-tested with an injected predicate; actually executing `npm.cmd` through `CreateProcess` is not |
 | `%LOCALAPPDATA%` resolution | the *logic* is unit-tested with a fake environment; the real variable is not |
@@ -78,17 +78,22 @@ it would not be, which is why PostgreSQL and MySQL are stopped with their own
 commands instead.  Foreground mode does send Ctrl-Break.  Full reasoning in
 [windows.md](windows.md).
 
-### The Job Object assignment race
+### Job Object assignment race: closed
 
-`subprocess.Popen` does not expose the primary thread handle, so a process cannot
-be created suspended and resumed after being assigned to its job.  A descendant
-spawned between `CreateProcess` and `AssignProcessToJobObject` would escape the
-job and survive `devbox down`.
+The original implementation launched the root process before assigning it to
+its Job Object, leaving a small interval in which a rapidly spawned descendant
+could escape.  Windows launches are now created with `CREATE_SUSPENDED`, assigned
+to the named Job Object, and resumed only afterwards through the Toolhelp thread
+APIs.  Because user code cannot execute while the initial thread is suspended,
+there is no launch interval in which a descendant can escape.
 
-The window is microseconds; no interpreter or package manager has finished
-start-up in that time.  Closing it properly means reimplementing `CreateProcess`
-with `CREATE_SUSPENDED` via `ctypes`.  Not done; the trade-off is recorded here
-rather than hidden.
+Devbox also captures the verified root's descendant chain before stopping the
+Job Object.  A double Toolhelp snapshot, creation-time check, and pinned process
+handles provide a guarded fallback when an outer host job changes inheritance
+semantics.  A descendant that explicitly requests `CREATE_BREAKAWAY_FROM_JOB`
+can still leave the Job Object if policy permits it, but it is included in this
+fallback while its verified parent chain remains connected to the live root.
+Devbox never grants that flag to processes it starts.
 
 ### Exit codes are not available across invocations
 
@@ -144,7 +149,6 @@ and mean less.  They are exercised by the `windows-latest` job.
 
 1. Run the real PostgreSQL and MySQL providers against real binaries on a
    Windows machine and correct the flags they need.
-2. Close the Job Object assignment race with `CREATE_SUSPENDED`.
-3. Ship a concrete Redis provider, since the abstraction is already proven.
-4. Stream `devbox exec` output instead of buffering it.
-5. Publish a signed reference registry so the example can commit a lockfile.
+2. Ship a concrete Redis provider, since the abstraction is already proven.
+3. Stream `devbox exec` output instead of buffering it.
+4. Publish a signed reference registry so the example can commit a lockfile.

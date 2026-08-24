@@ -25,6 +25,7 @@ Run it with::
 
 from __future__ import annotations
 
+import hashlib
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -34,7 +35,22 @@ from pathlib import Path
 from devbox.host.files import remove_tree
 from devbox.host.platform_info import current_platform
 
-__all__ = ["BuildOptions", "build", "hidden_imports", "pyinstaller_arguments"]
+__all__ = [
+    "BuildOptions",
+    "artifact_path",
+    "build",
+    "hidden_imports",
+    "pyinstaller_arguments",
+]
+
+
+def _project_root() -> Path:
+    """Locate the source checkout without depending on the caller's CWD."""
+    return Path(__file__).resolve().parents[3]
+
+
+def _source_root() -> Path:
+    return _project_root() / "src"
 
 
 def hidden_imports() -> tuple[str, ...]:
@@ -83,9 +99,9 @@ class BuildOptions:
     """How to build the executable."""
 
     name: str = "devbox"
-    entry_point: Path = field(default_factory=lambda: Path("src/devbox/__main__.py"))
-    dist_dir: Path = field(default_factory=lambda: Path("dist"))
-    work_dir: Path = field(default_factory=lambda: Path("build/pyinstaller"))
+    entry_point: Path = field(default_factory=lambda: _source_root() / "devbox" / "__main__.py")
+    dist_dir: Path = field(default_factory=lambda: _project_root() / "dist")
+    work_dir: Path = field(default_factory=lambda: _project_root() / "build" / "pyinstaller")
     one_file: bool = True
     console: bool = True
     clean: bool = True
@@ -111,7 +127,7 @@ def pyinstaller_arguments(options: BuildOptions) -> list[str]:
         "--onefile" if options.one_file else "--onedir",
         # src/ is not on sys.path in a frozen build unless it is added here.
         "--paths",
-        "src",
+        str(_source_root()),
     ]
     if options.clean:
         arguments.append("--clean")
@@ -127,6 +143,22 @@ def pyinstaller_available() -> bool:
     import importlib.util
 
     return importlib.util.find_spec("PyInstaller") is not None
+
+
+def artifact_path(options: BuildOptions) -> Path:
+    """Return the file PyInstaller is expected to produce on this platform."""
+    suffix = current_platform().executable_suffix
+    if options.one_file:
+        return options.dist_dir / f"{options.name}{suffix}"
+    return options.dist_dir / options.name / f"{options.name}{suffix}"
+
+
+def _write_checksum(artifact: Path) -> Path:
+    """Write a standard SHA-256 sidecar suitable for transfer verification."""
+    digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    checksum = artifact.with_name(f"{artifact.name}.sha256")
+    checksum.write_text(f"{digest}  {artifact.name}\n", encoding="ascii")
+    return checksum
 
 
 def build(options: BuildOptions | None = None, *, argv: Sequence[str] | None = None) -> int:
@@ -148,11 +180,14 @@ def build(options: BuildOptions | None = None, *, argv: Sequence[str] | None = N
         check=False,
     )
     if completed.returncode == 0:
-        suffix = current_platform().executable_suffix
-        produced = settings.dist_dir / f"{settings.name}{suffix}"
+        produced = artifact_path(settings)
+        if not produced.is_file():
+            print(f"PyInstaller succeeded but did not create {produced}", file=sys.stderr)
+            return 4
+        checksum = _write_checksum(produced)
         print(f"\nBuilt {produced}")
-        if produced.is_file():
-            print(f"  size: {produced.stat().st_size / 1024 / 1024:.1f} MB")
+        print(f"  size: {produced.stat().st_size / 1024 / 1024:.1f} MB")
+        print(f"  sha256: {checksum}")
     return completed.returncode
 
 

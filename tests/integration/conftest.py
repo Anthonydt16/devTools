@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 
 import pytest
+from tests.conftest import minimal_child_environment
 
 from devbox.process import LaunchSpec, ProcessRecord
 from devbox.process.base import BaseSupervisor
@@ -72,16 +73,17 @@ def launch(tmp_path: Path, fake_node: Path) -> Callable[..., LaunchSpec]:
         stop_timeout: float = 5.0,
     ) -> LaunchSpec:
         root = runtime or fake_node
+        child_env = minimal_child_environment(
+            PATH=str(root),
+            DEVBOX_FAKE_RUNTIME_VERSION=root.name,
+            DEVBOX_FAKE_RUNTIME_NAME=name,
+        )
+        child_env.update(env or {})
         return LaunchSpec(
             name=name,
             argv=(sys.executable, str(root / "runtime_main.py"), *args),
             working_dir=working_dir or working,
-            env={
-                "PATH": str(root),
-                "DEVBOX_FAKE_RUNTIME_VERSION": root.name,
-                "DEVBOX_FAKE_RUNTIME_NAME": name,
-                **(env or {}),
-            },
+            env=child_env,
             stdout_path=logs / f"{name}.out.log",
             stderr_path=logs / f"{name}.err.log",
             stop_timeout=stop_timeout,

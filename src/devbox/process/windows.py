@@ -37,12 +37,10 @@ not an omission.**
     console event.  In foreground mode the child shares Devbox's console, and
     then Ctrl-Break is sent first.
 
-**The assignment race.**
-    ``subprocess.Popen`` does not expose the primary thread handle, so a process
-    cannot be created suspended and resumed after being assigned to the job.  A
-    descendant spawned between ``CreateProcess`` and ``AssignProcessToJobObject``
-    would escape.  The window is microseconds; no interpreter or package manager
-    has finished start-up in that time.  Recorded in docs/limitations.md.
+**Assignment is race-free.**
+    The root is created with ``CREATE_SUSPENDED``, assigned to its Job Object,
+    then resumed by enumerating its initial thread.  No user code can run before
+    assignment, so no descendant can escape the job during launch.
 
 This module cannot execute in the Linux development container.  It is exercised
 by the ``windows-latest`` CI job (``tests/windows/``) and nowhere else — no
@@ -57,6 +55,7 @@ import signal
 import subprocess
 from collections.abc import Callable
 
+from devbox.errors import ProcessError
 from devbox.host import winapi
 from devbox.host.platform_info import is_windows
 from devbox.process.base import BaseSupervisor, LaunchOptions, StartupExtras
@@ -144,7 +143,7 @@ class WindowsSupervisor(BaseSupervisor):
         )
 
     def _after_start(self, spec: LaunchSpec, process: subprocess.Popen[bytes]) -> StartupExtras:
-        """Create the job and put the child in it, as early as possible."""
+        """Assign the suspended child to its job, then let it execute."""
         name = job_object_name(self._project_id, spec.name)
         job = winapi.JobObject.create(
             name,
@@ -153,6 +152,7 @@ class WindowsSupervisor(BaseSupervisor):
         )
         try:
             job.assign_pid(process.pid)
+            winapi.resume_process_threads(process.pid)
         except Exception:
             # Never leave a started process unsupervised: if it cannot be put in
             # a job, stop it rather than leaking an unkillable tree.
@@ -183,24 +183,41 @@ class WindowsSupervisor(BaseSupervisor):
 
     def _terminate_tree(self, record: ProcessRecord) -> None:
         """Terminate every process in the job — including grandchildren."""
-        job = self._jobs.get(record.service_id)
-        if job is not None:
-            job.terminate()
-            return
-
-        # Different Devbox invocation: reopen the job by name.
-        reopened = winapi.JobObject.open(record.job_name) if record.job_name else None
-        if reopened is not None:
+        descendants: tuple[winapi.CapturedProcess, ...] = ()
+        if record.creation_time is not None:
             try:
-                reopened.terminate()
-            finally:
-                reopened.close()
-            return
+                descendants = winapi.capture_descendant_processes(record.pid, record.creation_time)
+            except ProcessError:
+                # The Job Object remains authoritative. Failure to take the
+                # guarded fallback snapshot must not prevent its termination.
+                descendants = ()
 
-        # Last resort: the job is gone (rebooted, or the record predates it).
-        # Terminate the single process; descendants are reported, not pretended
-        # away, by the caller re-running status afterwards.
-        self._terminate_single(record)
+        try:
+            job = self._jobs.get(record.service_id)
+            if job is not None:
+                job.terminate()
+                return
+
+            # Different Devbox invocation: reopen the job by name.
+            reopened = winapi.JobObject.open(record.job_name) if record.job_name else None
+            if reopened is not None:
+                try:
+                    reopened.terminate()
+                finally:
+                    reopened.close()
+                return
+
+            # Last resort: the job is gone (rebooted, or the record predates it).
+            self._terminate_single(record)
+        finally:
+            # Some host jobs can alter descendant inheritance semantics. These
+            # handles pin only processes whose ancestry and creation time were
+            # verified against the owned root before the primary stop began.
+            for descendant in descendants:
+                try:
+                    descendant.terminate()
+                finally:
+                    descendant.close()
 
     @staticmethod
     def _terminate_single(record: ProcessRecord) -> None:

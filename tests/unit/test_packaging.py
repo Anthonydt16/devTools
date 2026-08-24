@@ -9,8 +9,10 @@ the package reads a data file relative to ``__file__`` at import time.
 from __future__ import annotations
 
 import ast
+import hashlib
 import importlib
 import importlib.util
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -19,6 +21,7 @@ import devbox
 from devbox.packaging.build_exe import (
     EXCLUDED_MODULES,
     BuildOptions,
+    artifact_path,
     build,
     hidden_imports,
     pyinstaller_arguments,
@@ -39,12 +42,24 @@ class TestArguments:
     def test_the_source_directory_is_on_the_path(self) -> None:
         arguments = pyinstaller_arguments(BuildOptions())
         assert "--paths" in arguments
-        assert "src" in arguments
+        source_path = Path(arguments[arguments.index("--paths") + 1])
+        assert source_path == REPO_ROOT / "src"
+        assert source_path.is_dir()
+
+    def test_default_paths_do_not_depend_on_the_working_directory(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        options = BuildOptions()
+        assert options.entry_point == PACKAGE_ROOT / "__main__.py"
+        assert options.dist_dir == REPO_ROOT / "dist"
+        assert options.work_dir == REPO_ROOT / "build" / "pyinstaller"
 
     def test_a_one_file_console_executable_is_the_default(self) -> None:
         arguments = pyinstaller_arguments(BuildOptions())
         assert "--onefile" in arguments
         assert "--console" in arguments
+        assert "--uac-admin" not in arguments
 
     def test_one_dir_can_be_selected(self) -> None:
         arguments = pyinstaller_arguments(BuildOptions(one_file=False))
@@ -160,3 +175,32 @@ class TestBuildEntryPoint:
         monkeypatch.setattr("devbox.packaging.build_exe.pyinstaller_available", lambda: False)
         code = build(BuildOptions(entry_point=PACKAGE_ROOT / "__main__.py"))
         assert code == 3
+
+    def test_build_rejects_a_missing_output_after_pyinstaller_success(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr("devbox.packaging.build_exe.pyinstaller_available", lambda: True)
+        monkeypatch.setattr(
+            "devbox.packaging.build_exe.subprocess.run",
+            lambda *args, **kwargs: subprocess.CompletedProcess(args=[], returncode=0),
+        )
+        options = BuildOptions(entry_point=PACKAGE_ROOT / "__main__.py", dist_dir=tmp_path)
+        assert build(options) == 4
+
+    def test_successful_build_writes_a_sha256_sidecar(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr("devbox.packaging.build_exe.pyinstaller_available", lambda: True)
+        monkeypatch.setattr(
+            "devbox.packaging.build_exe.subprocess.run",
+            lambda *args, **kwargs: subprocess.CompletedProcess(args=[], returncode=0),
+        )
+        options = BuildOptions(entry_point=PACKAGE_ROOT / "__main__.py", dist_dir=tmp_path)
+        produced = artifact_path(options)
+        produced.parent.mkdir(parents=True, exist_ok=True)
+        produced.write_bytes(b"release candidate")
+
+        assert build(options) == 0
+        checksum = produced.with_name(f"{produced.name}.sha256")
+        expected = hashlib.sha256(b"release candidate").hexdigest()
+        assert checksum.read_text(encoding="ascii") == f"{expected}  {produced.name}\n"

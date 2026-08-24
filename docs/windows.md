@@ -14,8 +14,10 @@ provide: a **Job Object** per service.
 ```
 CreateJobObjectW(NULL, "Local\\Devbox-<project-hash>-<service>")
 SetInformationJobObject(...)            # KILL_ON_JOB_CLOSE, foreground mode only
-CreateProcess(...)                      # CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
-AssignProcessToJobObject(job, process)  # descendants inherit the job
+CreateProcess(...)                      # CREATE_SUSPENDED + console/group flags
+AssignProcessToJobObject(job, process)  # root is assigned before user code runs
+CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD)
+ResumeThread(primary_thread)            # descendants now inherit the job
 ...
 GenerateConsoleCtrlEvent(CTRL_BREAK)    # graceful first
 TerminateJobObject(job, 1)              # escalation after stop_timeout
@@ -42,8 +44,8 @@ in tension, and Devbox resolves it explicitly:
 
 | Mode | Flags | Stop |
 |---|---|---|
-| detached (default) | `CREATE_NO_WINDOW` + `CREATE_NEW_PROCESS_GROUP` | `TerminateJobObject`, immediately |
-| foreground | `CREATE_NEW_PROCESS_GROUP` only | `CTRL_BREAK_EVENT`, then `TerminateJobObject` after `stop_timeout` |
+| detached (default) | `CREATE_SUSPENDED` + `CREATE_NO_WINDOW` + `CREATE_NEW_PROCESS_GROUP` | `TerminateJobObject`, immediately |
+| foreground | `CREATE_SUSPENDED` + `CREATE_NEW_PROCESS_GROUP` | `CTRL_BREAK_EVENT`, then `TerminateJobObject` after `stop_timeout` |
 
 Sending an event that cannot be delivered would be worse than not sending one:
 if `GenerateConsoleCtrlEvent` returned success without reaching anybody, every
@@ -60,16 +62,28 @@ Since Windows 8, jobs nest, so assigning a process that already belongs to
 another job (a CI agent's, for instance) succeeds instead of failing with
 `ERROR_ACCESS_DENIED`.
 
-### The assignment race
+The Job Object remains the primary stop mechanism.  As a defensive fallback for
+hosts whose outer job changes descendant-inheritance behaviour, Devbox also
+captures the verified root's descendant chain before calling
+`TerminateJobObject`.  It opens and pins only descendants that remain below that
+root in a second Toolhelp snapshot and whose creation time does not predate the
+root.  After the Job Object stop, any captured process still alive is terminated
+through its handle; PID reuse cannot redirect that handle to an unrelated
+process.
 
-`subprocess.Popen` does not expose the primary thread handle, so a process cannot
-be created suspended and resumed after being assigned to the job.  A descendant
-spawned between `CreateProcess` and `AssignProcessToJobObject` would escape it.
+### Race-free assignment
 
-The window is microseconds and no interpreter or package manager has finished
-start-up in that time.  Closing it properly would mean reimplementing
-`CreateProcess` with `CREATE_SUSPENDED` via `ctypes`.  Recorded in
-[limitations.md](limitations.md); measured cost so far: zero observed escapes.
+Every supervised Windows process is created with `CREATE_SUSPENDED`.  Devbox
+assigns that process to its named Job Object before resuming the initial thread,
+so user code cannot run and cannot spawn a descendant outside the job during
+launch.
+
+`subprocess.Popen` closes the primary thread handle before returning.  Devbox
+therefore uses the documented Toolhelp APIs to enumerate the newly created
+process's thread, opens it with `THREAD_SUSPEND_RESUME`, and calls
+`ResumeThread` only after `AssignProcessToJobObject` succeeds.  If enumeration,
+assignment, or resumption fails, startup fails closed and the suspended process
+is terminated; an unsupervised service is never left behind.
 
 ## `ctypes`, and the bug that only appears on 64-bit Windows
 

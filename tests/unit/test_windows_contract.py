@@ -26,6 +26,7 @@ from devbox.process.windows import job_object_name
 from devbox.security.command import (
     CREATE_NEW_PROCESS_GROUP,
     CREATE_NO_WINDOW,
+    CREATE_SUSPENDED,
     creation_flags,
 )
 
@@ -90,14 +91,30 @@ class TestWin32Signatures:
         assert unused == set(), f"declared but never called: {sorted(unused)}"
 
     def test_handle_returning_functions_return_a_pointer_not_an_int(self) -> None:
-        for name in ("OpenProcess", "CreateJobObjectW", "OpenJobObjectW"):
+        for name in (
+            "OpenProcess",
+            "CreateJobObjectW",
+            "OpenJobObjectW",
+            "CreateToolhelp32Snapshot",
+            "OpenThread",
+        ):
             restype, _argtypes = winapi.SIGNATURES[name]
             assert restype is ctypes.c_void_p, (
                 f"{name} returns a HANDLE; declaring it as {restype} truncates it on Win64"
             )
 
     def test_handle_taking_functions_accept_a_pointer_not_an_int(self) -> None:
-        for name in ("CloseHandle", "TerminateJobObject", "AssignProcessToJobObject"):
+        for name in (
+            "CloseHandle",
+            "TerminateJobObject",
+            "AssignProcessToJobObject",
+            "Thread32First",
+            "Thread32Next",
+            "Process32FirstW",
+            "Process32NextW",
+            "ResumeThread",
+            "TerminateProcess",
+        ):
             _restype, argtypes = winapi.SIGNATURES[name]
             assert argtypes[0] is ctypes.c_void_p, f"{name} takes a HANDLE first"
 
@@ -112,6 +129,14 @@ class TestWin32Signatures:
             "SetInformationJobObject": 4,
             "AssignProcessToJobObject": 2,
             "TerminateJobObject": 2,
+            "CreateToolhelp32Snapshot": 2,
+            "Thread32First": 2,
+            "Thread32Next": 2,
+            "Process32FirstW": 2,
+            "Process32NextW": 2,
+            "OpenThread": 3,
+            "ResumeThread": 1,
+            "TerminateProcess": 2,
         }
         actual = {name: len(argtypes) for name, (_r, argtypes) in winapi.SIGNATURES.items()}
         assert actual == expected
@@ -151,6 +176,7 @@ class TestCreationFlags:
         flags = creation_flags(new_process_group=True, own_console=True)
         assert flags & CREATE_NO_WINDOW
         assert flags & CREATE_NEW_PROCESS_GROUP
+        assert flags & CREATE_SUSPENDED
 
     def test_a_foreground_service_shares_the_console_so_ctrl_break_can_reach_it(
         self, monkeypatch: pytest.MonkeyPatch
@@ -159,10 +185,30 @@ class TestCreationFlags:
         flags = creation_flags(new_process_group=True, own_console=False)
         assert not flags & CREATE_NO_WINDOW
         assert flags & CREATE_NEW_PROCESS_GROUP
+        assert flags & CREATE_SUSPENDED
 
     def test_posix_gets_no_creation_flags(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("devbox.security.command.is_windows", lambda: False)
         assert creation_flags() == 0
+
+
+class TestDescendantSelection:
+    def test_only_the_verified_root_branch_is_selected(self) -> None:
+        parents = {
+            10: 1,
+            11: 10,
+            12: 11,
+            20: 1,
+            21: 20,
+            30: 30,
+        }
+
+        assert winapi._descendant_pids(parents, 10) == {11, 12}
+
+    def test_a_parent_cycle_cannot_pull_in_an_unrelated_branch(self) -> None:
+        parents = {10: 1, 11: 10, 40: 41, 41: 40, 42: 41}
+
+        assert winapi._descendant_pids(parents, 10) == {11}
 
 
 class TestGracefulStopIsHonest:

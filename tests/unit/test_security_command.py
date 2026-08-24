@@ -10,6 +10,7 @@ from devbox.errors import ConfigError
 from devbox.security.command import (
     CREATE_NEW_PROCESS_GROUP,
     CREATE_NO_WINDOW,
+    CREATE_SUSPENDED,
     WINDOWS_EXECUTABLE_EXTENSIONS,
     creation_flags,
     environment_for_display,
@@ -31,6 +32,10 @@ class TestSplitting:
     def test_a_windows_path_inside_quotes_keeps_its_backslashes(self) -> None:
         argv = split_command('node "C:\\Program Files\\app\\server.js"')
         assert argv[1] == "C:\\Program Files\\app\\server.js"
+
+    def test_an_unquoted_windows_path_keeps_its_backslashes(self) -> None:
+        argv = split_command(r"python C:\Users\gogod\AppData\Local\Programs\Python\python.exe")
+        assert argv[1] == r"C:\Users\gogod\AppData\Local\Programs\Python\python.exe"
 
     def test_a_list_is_returned_verbatim(self) -> None:
         raw = ["node", "-e", "console.log('a b')"]
@@ -92,6 +97,26 @@ class TestExecutableResolution:
         )
         assert found == "/rt/node24/node.exe"
 
+    def test_a_windows_launcher_wins_over_an_extensionless_posix_sibling(self) -> None:
+        files = {"/rt/node", "/rt/node.exe", "/rt/npm", "/rt/npm.cmd"}
+
+        node = resolve_executable(
+            "node", path_entries=["/rt"], is_windows=True, exists=lambda c: c in files
+        )
+        npm = resolve_executable(
+            "npm", path_entries=["/rt"], is_windows=True, exists=lambda c: c in files
+        )
+
+        assert node == "/rt/node.exe"
+        assert npm == "/rt/npm.cmd"
+
+    def test_a_windows_path_prefers_its_suffixed_sibling(self) -> None:
+        files = {"/rt/node", "/rt/node.exe"}
+        found = resolve_executable(
+            "/rt/node", path_entries=[], is_windows=True, exists=lambda c: c in files
+        )
+        assert found == "/rt/node.exe"
+
     def test_no_extension_is_appended_on_posix(self, files: set[str]) -> None:
         assert (
             resolve_executable(
@@ -152,6 +177,7 @@ class TestCreationFlags:
     def test_the_win32_constants_are_the_documented_values(self) -> None:
         assert CREATE_NO_WINDOW == 0x08000000
         assert CREATE_NEW_PROCESS_GROUP == 0x00000200
+        assert CREATE_SUSPENDED == 0x00000004
 
 
 class TestSecretMasking:
